@@ -1,5 +1,14 @@
-.vscode
-__pycache__
-graphify-out
-paper_text_utd8.txt
-paper_text.txt
+# IDE & environment
+.vscode/
+
+# Python cache
+__pycache__/
+*.py[cod]
+
+# Graphify tool outputs
+graphify-out/
+
+# Large paper text / raw docs (keeps docs/raalora_explained.md)
+docs/paper_text.txt
+docs/paper_text_utf8.txt
+docs/RaaLora1.3.docx.doc
