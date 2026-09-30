@@ -1,0 +1,20 @@
+{
+    "python.defaultInterpreterPath": "C:\\Users\\Devang\\anaconda3\\envs\\Devang_Kore\\python.exe",
+    "python.analysis.extraPaths": [
+        "C:\\Users\\Devang\\anaconda3\\envs\\Devang_Kore\\Lib\\site-packages"
+    ],
+    "python.autoComplete.extraPaths": [
+        "C:\\Users\\Devang\\anaconda3\\envs\\Devang_Kore\\Lib\\site-packages"
+    ],
+    "editor.quickSuggestions": {
+        "other": "off",
+        "comments": "off",
+        "strings": "off"
+    },
+    "editor.suggestOnTriggerCharacters": false,
+    "editor.acceptSuggestionOnEnter": "off",
+    "editor.tabCompletion": "off",
+    "editor.inlineSuggest.enabled": false,
+    "editor.suggest.showWords": false,
+    "python.analysis.autoImportCompletions": false
+}

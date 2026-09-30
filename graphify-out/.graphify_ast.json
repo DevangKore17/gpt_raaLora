@@ -1,0 +1,694 @@
+{
+  "nodes": [
+    {
+      "id": "raalora_linear",
+      "label": "RaaLoRA_Linear.py",
+      "file_type": "code",
+      "source_file": "RaaLoRA_Linear.py",
+      "source_location": "L1",
+      "_origin": "ast"
+    },
+    {
+      "id": "raalora_linear_raalora",
+      "label": "RaaLoRA",
+      "file_type": "code",
+      "source_file": "RaaLoRA_Linear.py",
+      "source_location": "L6",
+      "_callable": true,
+      "_callable_class": true,
+      "_origin": "ast"
+    },
+    {
+      "id": "raalora_linear_py_module",
+      "label": "Module",
+      "file_type": "code",
+      "source_file": "",
+      "source_location": "",
+      "_origin": "ast"
+    },
+    {
+      "id": "raalora_linear_raalora_init",
+      "label": ".__init__()",
+      "file_type": "code",
+      "source_file": "RaaLoRA_Linear.py",
+      "source_location": "L8",
+      "_callable": true,
+      "_origin": "ast"
+    },
+    {
+      "id": "raalora_linear_raalora_forward",
+      "label": ".forward()",
+      "file_type": "code",
+      "source_file": "RaaLoRA_Linear.py",
+      "source_location": "L21",
+      "_callable": true,
+      "_origin": "ast"
+    },
+    {
+      "id": "loss",
+      "label": "loss.py",
+      "file_type": "code",
+      "source_file": "loss.py",
+      "source_location": "L1",
+      "_origin": "ast"
+    },
+    {
+      "id": "loss_compute_loss_penalty",
+      "label": "compute_loss_penalty()",
+      "file_type": "code",
+      "source_file": "loss.py",
+      "source_location": "L3",
+      "_callable": true,
+      "_origin": "ast"
+    },
+    {
+      "id": "pruner",
+      "label": "pruner.py",
+      "file_type": "code",
+      "source_file": "pruner.py",
+      "source_location": "L1",
+      "_origin": "ast"
+    },
+    {
+      "id": "pruner_prune_layers",
+      "label": "prune_layers()",
+      "file_type": "code",
+      "source_file": "pruner.py",
+      "source_location": "L4",
+      "_callable": true,
+      "_origin": "ast"
+    },
+    {
+      "id": "router",
+      "label": "router.py",
+      "file_type": "code",
+      "source_file": "router.py",
+      "source_location": "L1",
+      "_origin": "ast"
+    },
+    {
+      "id": "router_raalorarouter",
+      "label": "RaaLoRARouter",
+      "file_type": "code",
+      "source_file": "router.py",
+      "source_location": "L4",
+      "_callable": true,
+      "_callable_class": true,
+      "_origin": "ast"
+    },
+    {
+      "id": "router_py_module",
+      "label": "Module",
+      "file_type": "code",
+      "source_file": "",
+      "source_location": "",
+      "_origin": "ast"
+    },
+    {
+      "id": "router_raalorarouter_init",
+      "label": ".__init__()",
+      "file_type": "code",
+      "source_file": "router.py",
+      "source_location": "L5",
+      "_callable": true,
+      "_origin": "ast"
+    },
+    {
+      "id": "router_raalorarouter_forward",
+      "label": ".forward()",
+      "file_type": "code",
+      "source_file": "router.py",
+      "source_location": "L16",
+      "_callable": true,
+      "_origin": "ast"
+    },
+    {
+      "id": "scheduler",
+      "label": "scheduler.py",
+      "file_type": "code",
+      "source_file": "scheduler.py",
+      "source_location": "L1",
+      "_origin": "ast"
+    },
+    {
+      "id": "scheduler_get_penalty_weight",
+      "label": "get_penalty_weight()",
+      "file_type": "code",
+      "source_file": "scheduler.py",
+      "source_location": "L4",
+      "_callable": true,
+      "_origin": "ast"
+    },
+    {
+      "id": "scheduler_ema",
+      "label": "ema",
+      "file_type": "code",
+      "source_file": "scheduler.py",
+      "source_location": "L13",
+      "_callable": true,
+      "_callable_class": true,
+      "_origin": "ast"
+    },
+    {
+      "id": "scheduler_ema_init",
+      "label": ".__init__()",
+      "file_type": "code",
+      "source_file": "scheduler.py",
+      "source_location": "L14",
+      "_callable": true,
+      "_origin": "ast"
+    },
+    {
+      "id": "scheduler_ema_update",
+      "label": ".update()",
+      "file_type": "code",
+      "source_file": "scheduler.py",
+      "source_location": "L18",
+      "_callable": true,
+      "_origin": "ast"
+    },
+    {
+      "id": "scheduler_ema_get_value",
+      "label": ".get_value()",
+      "file_type": "code",
+      "source_file": "scheduler.py",
+      "source_location": "L24",
+      "_callable": true,
+      "_origin": "ast"
+    },
+    {
+      "id": "train",
+      "label": "train.py",
+      "file_type": "code",
+      "source_file": "train.py",
+      "source_location": "L1",
+      "_origin": "ast"
+    },
+    {
+      "id": "train_toymodel",
+      "label": "ToyModel",
+      "file_type": "code",
+      "source_file": "train.py",
+      "source_location": "L9",
+      "_callable": true,
+      "_callable_class": true,
+      "_origin": "ast"
+    },
+    {
+      "id": "train_py_module",
+      "label": "Module",
+      "file_type": "code",
+      "source_file": "",
+      "source_location": "",
+      "_origin": "ast"
+    },
+    {
+      "id": "train_toymodel_init",
+      "label": ".__init__()",
+      "file_type": "code",
+      "source_file": "train.py",
+      "source_location": "L10",
+      "_callable": true,
+      "_origin": "ast"
+    },
+    {
+      "id": "train_toymodel_forward",
+      "label": ".forward()",
+      "file_type": "code",
+      "source_file": "train.py",
+      "source_location": "L16",
+      "_callable": true,
+      "_origin": "ast"
+    }
+  ],
+  "edges": [
+    {
+      "source": "raalora_linear",
+      "target": "torch",
+      "relation": "imports",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "RaaLoRA_Linear.py",
+      "source_location": "L1",
+      "weight": 1.0,
+      "_origin": "ast"
+    },
+    {
+      "source": "raalora_linear",
+      "target": "torch_nn",
+      "relation": "imports_from",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "RaaLoRA_Linear.py",
+      "source_location": "L2",
+      "weight": 1.0,
+      "_origin": "ast"
+    },
+    {
+      "source": "raalora_linear",
+      "target": "router",
+      "relation": "imports_from",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "RaaLoRA_Linear.py",
+      "source_location": "L3",
+      "weight": 1.0,
+      "_origin": "ast"
+    },
+    {
+      "source": "raalora_linear",
+      "target": "raalora_linear_raalora",
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "RaaLoRA_Linear.py",
+      "source_location": "L6",
+      "weight": 1.0,
+      "_origin": "ast"
+    },
+    {
+      "source": "raalora_linear_raalora",
+      "target": "raalora_linear_py_module",
+      "relation": "inherits",
+      "confidence": "EXTRACTED",
+      "source_file": "RaaLoRA_Linear.py",
+      "source_location": "L6",
+      "weight": 1.0,
+      "_origin": "ast"
+    },
+    {
+      "source": "raalora_linear_raalora",
+      "target": "raalora_linear_raalora_init",
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "RaaLoRA_Linear.py",
+      "source_location": "L8",
+      "weight": 1.0,
+      "_origin": "ast"
+    },
+    {
+      "source": "raalora_linear_raalora",
+      "target": "raalora_linear_raalora_forward",
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "RaaLoRA_Linear.py",
+      "source_location": "L21",
+      "weight": 1.0,
+      "_origin": "ast"
+    },
+    {
+      "source": "loss",
+      "target": "torch",
+      "relation": "imports",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "loss.py",
+      "source_location": "L1",
+      "weight": 1.0,
+      "_origin": "ast"
+    },
+    {
+      "source": "loss",
+      "target": "loss_compute_loss_penalty",
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "loss.py",
+      "source_location": "L3",
+      "weight": 1.0,
+      "_origin": "ast"
+    },
+    {
+      "source": "pruner",
+      "target": "torch",
+      "relation": "imports",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "pruner.py",
+      "source_location": "L1",
+      "weight": 1.0,
+      "_origin": "ast"
+    },
+    {
+      "source": "pruner",
+      "target": "torch_nn",
+      "relation": "imports_from",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "pruner.py",
+      "source_location": "L2",
+      "weight": 1.0,
+      "_origin": "ast"
+    },
+    {
+      "source": "pruner",
+      "target": "pruner_prune_layers",
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "pruner.py",
+      "source_location": "L4",
+      "weight": 1.0,
+      "_origin": "ast"
+    },
+    {
+      "source": "router",
+      "target": "torch",
+      "relation": "imports",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "router.py",
+      "source_location": "L1",
+      "weight": 1.0,
+      "_origin": "ast"
+    },
+    {
+      "source": "router",
+      "target": "torch_nn",
+      "relation": "imports_from",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "router.py",
+      "source_location": "L2",
+      "weight": 1.0,
+      "_origin": "ast"
+    },
+    {
+      "source": "router",
+      "target": "router_raalorarouter",
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "router.py",
+      "source_location": "L4",
+      "weight": 1.0,
+      "_origin": "ast"
+    },
+    {
+      "source": "router_raalorarouter",
+      "target": "router_py_module",
+      "relation": "inherits",
+      "confidence": "EXTRACTED",
+      "source_file": "router.py",
+      "source_location": "L4",
+      "weight": 1.0,
+      "_origin": "ast"
+    },
+    {
+      "source": "router_raalorarouter",
+      "target": "router_raalorarouter_init",
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "router.py",
+      "source_location": "L5",
+      "weight": 1.0,
+      "_origin": "ast"
+    },
+    {
+      "source": "router_raalorarouter",
+      "target": "router_raalorarouter_forward",
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "router.py",
+      "source_location": "L16",
+      "weight": 1.0,
+      "_origin": "ast"
+    },
+    {
+      "source": "scheduler",
+      "target": "torch",
+      "relation": "imports",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "scheduler.py",
+      "source_location": "L1",
+      "weight": 1.0,
+      "_origin": "ast"
+    },
+    {
+      "source": "scheduler",
+      "target": "torch_nn",
+      "relation": "imports_from",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "scheduler.py",
+      "source_location": "L2",
+      "weight": 1.0,
+      "_origin": "ast"
+    },
+    {
+      "source": "scheduler",
+      "target": "scheduler_get_penalty_weight",
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "scheduler.py",
+      "source_location": "L4",
+      "weight": 1.0,
+      "_origin": "ast"
+    },
+    {
+      "source": "scheduler",
+      "target": "scheduler_ema",
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "scheduler.py",
+      "source_location": "L13",
+      "weight": 1.0,
+      "_origin": "ast"
+    },
+    {
+      "source": "scheduler_ema",
+      "target": "scheduler_ema_init",
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "scheduler.py",
+      "source_location": "L14",
+      "weight": 1.0,
+      "_origin": "ast"
+    },
+    {
+      "source": "scheduler_ema",
+      "target": "scheduler_ema_update",
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "scheduler.py",
+      "source_location": "L18",
+      "weight": 1.0,
+      "_origin": "ast"
+    },
+    {
+      "source": "scheduler_ema",
+      "target": "scheduler_ema_get_value",
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "scheduler.py",
+      "source_location": "L24",
+      "weight": 1.0,
+      "_origin": "ast"
+    },
+    {
+      "source": "train",
+      "target": "torch",
+      "relation": "imports",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "train.py",
+      "source_location": "L2",
+      "weight": 1.0,
+      "_origin": "ast"
+    },
+    {
+      "source": "train",
+      "target": "torch_nn",
+      "relation": "imports_from",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "train.py",
+      "source_location": "L3",
+      "weight": 1.0,
+      "_origin": "ast"
+    },
+    {
+      "source": "train",
+      "target": "raalora_linear",
+      "relation": "imports_from",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "train.py",
+      "source_location": "L4",
+      "weight": 1.0,
+      "_origin": "ast"
+    },
+    {
+      "source": "train",
+      "target": "router",
+      "relation": "imports_from",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "train.py",
+      "source_location": "L5",
+      "weight": 1.0,
+      "_origin": "ast"
+    },
+    {
+      "source": "train",
+      "target": "scheduler",
+      "relation": "imports_from",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "train.py",
+      "source_location": "L6",
+      "weight": 1.0,
+      "_origin": "ast"
+    },
+    {
+      "source": "train",
+      "target": "pruner",
+      "relation": "imports_from",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "train.py",
+      "source_location": "L7",
+      "weight": 1.0,
+      "_origin": "ast"
+    },
+    {
+      "source": "train",
+      "target": "train_toymodel",
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "train.py",
+      "source_location": "L9",
+      "weight": 1.0,
+      "_origin": "ast"
+    },
+    {
+      "source": "train_toymodel",
+      "target": "train_py_module",
+      "relation": "inherits",
+      "confidence": "EXTRACTED",
+      "source_file": "train.py",
+      "source_location": "L9",
+      "weight": 1.0,
+      "_origin": "ast"
+    },
+    {
+      "source": "train_toymodel",
+      "target": "train_toymodel_init",
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "train.py",
+      "source_location": "L10",
+      "weight": 1.0,
+      "_origin": "ast"
+    },
+    {
+      "source": "train_toymodel",
+      "target": "train_toymodel_forward",
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "train.py",
+      "source_location": "L16",
+      "weight": 1.0,
+      "_origin": "ast"
+    },
+    {
+      "source": "train",
+      "target": "torch_nn_functional",
+      "relation": "imports",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "train.py",
+      "source_location": "L72",
+      "weight": 1.0,
+      "_origin": "ast"
+    },
+    {
+      "source": "train",
+      "target": "loss",
+      "relation": "imports_from",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "train.py",
+      "source_location": "L73",
+      "weight": 1.0,
+      "_origin": "ast"
+    },
+    {
+      "source": "raalora_linear",
+      "target": "router_raalorarouter",
+      "relation": "imports",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "RaaLoRA_Linear.py",
+      "source_location": "L3",
+      "weight": 1.0,
+      "_origin": "ast"
+    },
+    {
+      "source": "train",
+      "target": "raalora_linear_raalora",
+      "relation": "imports",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "train.py",
+      "source_location": "L4",
+      "weight": 1.0,
+      "_origin": "ast"
+    },
+    {
+      "source": "train",
+      "target": "router_raalorarouter",
+      "relation": "imports",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "train.py",
+      "source_location": "L5",
+      "weight": 1.0,
+      "_origin": "ast"
+    },
+    {
+      "source": "train",
+      "target": "scheduler_ema",
+      "relation": "imports",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "train.py",
+      "source_location": "L6",
+      "weight": 1.0,
+      "_origin": "ast"
+    },
+    {
+      "source": "train",
+      "target": "scheduler_get_penalty_weight",
+      "relation": "imports",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "train.py",
+      "source_location": "L6",
+      "weight": 1.0,
+      "_origin": "ast"
+    },
+    {
+      "source": "train",
+      "target": "pruner_prune_layers",
+      "relation": "imports",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "train.py",
+      "source_location": "L7",
+      "weight": 1.0,
+      "_origin": "ast"
+    },
+    {
+      "source": "train",
+      "target": "loss_compute_loss_penalty",
+      "relation": "imports",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "train.py",
+      "source_location": "L73",
+      "weight": 1.0,
+      "_origin": "ast"
+    }
+  ],
+  "input_tokens": 0,
+  "output_tokens": 0,
+  "failed_sources": []
+}

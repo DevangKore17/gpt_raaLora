@@ -1,0 +1,201 @@
+{
+  "communities": {
+    "0": [
+      "loss",
+      "loss_compute_loss_penalty",
+      "pruner",
+      "pruner_prune_layers",
+      "scheduler",
+      "scheduler_get_penalty_weight",
+      "train"
+    ],
+    "1": [
+      "raalora_linear",
+      "router",
+      "router_py_module",
+      "router_raalorarouter",
+      "router_raalorarouter_forward",
+      "router_raalorarouter_init"
+    ],
+    "2": [
+      "docs_paper_text_average_pooling",
+      "docs_paper_text_budget_penalty",
+      "docs_raalora_explained_average_pooling",
+      "docs_raalora_explained_budget_penalty",
+      "docs_raalora_explained_router"
+    ],
+    "3": [
+      "docs_paper_text_adalora",
+      "docs_paper_text_dynamic_routing",
+      "docs_paper_text_flexilora",
+      "docs_paper_text_raalora"
+    ],
+    "4": [
+      "raalora_linear_py_module",
+      "raalora_linear_raalora",
+      "raalora_linear_raalora_forward",
+      "raalora_linear_raalora_init"
+    ],
+    "5": [
+      "scheduler_ema",
+      "scheduler_ema_get_value",
+      "scheduler_ema_init",
+      "scheduler_ema_update"
+    ],
+    "6": [
+      "train_py_module",
+      "train_toymodel",
+      "train_toymodel_forward",
+      "train_toymodel_init"
+    ],
+    "7": [
+      "docs_paper_text_lora",
+      "docs_paper_text_peft",
+      "docs_raalora_explained_lora"
+    ],
+    "8": [
+      "docs_raalora_explained_2_stage_pipeline",
+      "docs_raalora_explained_ema",
+      "docs_raalora_explained_raalora"
+    ],
+    "9": [
+      "docs_paper_text_llama_3_2_1b"
+    ],
+    "10": [
+      "docs_paper_text_structural_pruning"
+    ]
+  },
+  "cohesion": {
+    "0": 0.42857142857142855,
+    "1": 0.4,
+    "2": 0.4,
+    "3": 0.5,
+    "4": 0.5,
+    "5": 0.5,
+    "6": 0.5,
+    "7": 0.6666666666666666,
+    "8": 0.6666666666666666,
+    "9": 1.0,
+    "10": 1.0
+  },
+  "gods": [
+    {
+      "id": "docs_paper_text_raalora",
+      "label": "RaaLoRA",
+      "degree": 7
+    },
+    {
+      "id": "router_raalorarouter",
+      "label": "RaaLoRARouter",
+      "degree": 6
+    },
+    {
+      "id": "raalora_linear_raalora",
+      "label": "RaaLoRA",
+      "degree": 5
+    },
+    {
+      "id": "scheduler_ema",
+      "label": "ema",
+      "degree": 5
+    },
+    {
+      "id": "train_toymodel",
+      "label": "ToyModel",
+      "degree": 4
+    },
+    {
+      "id": "docs_raalora_explained_raalora",
+      "label": "RaaLoRA",
+      "degree": 4
+    },
+    {
+      "id": "docs_paper_text_lora",
+      "label": "LoRA",
+      "degree": 3
+    },
+    {
+      "id": "docs_raalora_explained_router",
+      "label": "Router",
+      "degree": 3
+    },
+    {
+      "id": "loss_compute_loss_penalty",
+      "label": "compute_loss_penalty()",
+      "degree": 2
+    },
+    {
+      "id": "pruner_prune_layers",
+      "label": "prune_layers()",
+      "degree": 2
+    }
+  ],
+  "surprises": [
+    {
+      "source": "RaaLoRA",
+      "target": "RaaLoRA",
+      "source_files": [
+        "docs/paper_text.txt",
+        "docs/raalora_explained.md"
+      ],
+      "confidence": "INFERRED",
+      "relation": "semantically_similar_to",
+      "why": "inferred connection - not explicitly stated in source; bridges separate communities; semantically similar concepts with no structural link"
+    },
+    {
+      "source": "LoRA",
+      "target": "LoRA",
+      "source_files": [
+        "docs/paper_text.txt",
+        "docs/raalora_explained.md"
+      ],
+      "confidence": "INFERRED",
+      "relation": "semantically_similar_to",
+      "why": "inferred connection - not explicitly stated in source; semantically similar concepts with no structural link"
+    },
+    {
+      "source": "Average Pooling",
+      "target": "Average Pooling",
+      "source_files": [
+        "docs/paper_text.txt",
+        "docs/raalora_explained.md"
+      ],
+      "confidence": "INFERRED",
+      "relation": "semantically_similar_to",
+      "why": "inferred connection - not explicitly stated in source; semantically similar concepts with no structural link"
+    },
+    {
+      "source": "Budget Penalty",
+      "target": "Budget Penalty",
+      "source_files": [
+        "docs/paper_text.txt",
+        "docs/raalora_explained.md"
+      ],
+      "confidence": "INFERRED",
+      "relation": "semantically_similar_to",
+      "why": "inferred connection - not explicitly stated in source; semantically similar concepts with no structural link"
+    }
+  ],
+  "questions": [
+    {
+      "type": "bridge_node",
+      "question": "Why does `RaaLoRA` connect `Community 4` to `Community 0`, `Community 1`?",
+      "why": "High betweenness centrality (0.080) - this node is a cross-community bridge."
+    },
+    {
+      "type": "bridge_node",
+      "question": "Why does `RaaLoRARouter` connect `Community 1` to `Community 0`?",
+      "why": "High betweenness centrality (0.080) - this node is a cross-community bridge."
+    },
+    {
+      "type": "bridge_node",
+      "question": "Why does `ema` connect `Community 5` to `Community 0`?",
+      "why": "High betweenness centrality (0.080) - this node is a cross-community bridge."
+    },
+    {
+      "type": "isolated_nodes",
+      "question": "What connects `AdaLoRA`, `FlexiLoRA`, `Parameter-Efficient Fine-Tuning` to the rest of the system?",
+      "why": "4 weakly-connected nodes found - possible documentation gaps or missing edges."
+    }
+  ]
+}

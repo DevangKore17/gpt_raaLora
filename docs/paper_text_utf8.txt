@@ -1,0 +1,1014 @@
+﻿RaaLoRA: Rank Adaptive low-rank Adaptation
+Devang H. Kore, Shubham Khandekar, Adnan Khan
+Abstract- 
+INTRODUCTION
+Deploying Large Language Models (LLMs) in real applications is difficult because they need a lot of memory and compute power. To adapt these models for specific tasks on normal hardware, Parameter-Efficient Fine-Tuning (PEFT) methods are commonly used. LoRA is the most popular PEFT method [1]. LoRA keeps the original model weights frozen and adds small trainable low-rank matrices to the transformer layers. This reduces the number of parameters we need to update during backpropagation, which saves resources.
+But standard LoRA uses the same rank value (e.g.,  
+HYPERLINK "https://www.codecogs.com/eqnedit.php?latex=%20r%20%3D%208%20" \l "0"
+ ) across all layers. This is not optimal because different layers have different requirements. Some layers process complex semantic information and need a higher rank. Other layers only deal with basic syntax and need very few changes. Using the same rank everywhere wastes VRAM on layers that do not actually need deep modifications [1].
+Researchers have proposed two main approaches to fix this problem: static allocation and dynamic routing. Static methods like AdaLoRA [2] use SVD metrics to assign different ranks to different layers. This works mathematically, but continuously tracking and updating these high-dimensional SVD matrices during training adds a lot of extra parameter overhead. Dynamic routing methods like FlexiLoRA [3] use a gating network to decide token-level importance on the fly. This is effective, but the router stays active during deployment. This adds extra computations for every token during inference, which creates latency [3].
+We propose RAALoRA. Our method uses dynamic routing only during training. After training, we use average pooling to convert the token-level scores into a fixed layer-level metric. We then prune the network to match this rank map and delete the router permanently.
+Our contributions are:
+ - We introduce a routing mechanism that works during training but does not affect deployment.
+- We use average pooling to create static layer ranks from dynamic token scores for pruning.
+- We show that RAALORA removes inference latency, uses only 0.86% trainable parameters, and achieves a competitive loss of 2.0626.
+ Literature Review
+2.1 Background on Parameter-Efficient Fine-Tuning
+A few years ago, fine-tuning meant updating all the weights of a neural network. For models with billions of parameters, this was a big bottleneck. Researchers started using adapter modules, which are basically small extra networks added between the main layers. This saved memory during training. But people soon realized that these extra layers made the model slower when it was making predictions because the data had to travel a longer path. This led to the idea of Low-Rank Adaptation, which mathematically merges the extra weights back into the main model so that no extra time is taken.
+2.2 Dynamic Routing in Neural Networks
+Instead of passing data through the whole network, conditional computation or dynamic routing tries to pass data only through specific parts of the network. The most famous example is Mixture of Experts (MoE). While this is great for increasing the model's knowledge without increasing the computational cost too much, the router itself takes up memory and processing time. Also, training a router is tricky because choosing between "Layer A" and "Layer B" is a hard yes-or-no decision, which stops the normal gradient flow in neural networks. Researchers solved this using smoothing techniques like Gumbel-Softmax, but the inference delay problem was still left unsolved.
+2.3 Structural Pruning
+Pruning means cutting out the useless weights of a model to make it lighter and faster. If we just randomly delete weights (unstructured pruning), the model doesn't actually run faster on modern GPUs because the memory becomes fragmented. To get real speed improvements, we have to delete entire rows or columns (structural pruning). The literature shows that pruning a model while it is training usually ruins the accuracy. The best way, as suggested by many authors, is to train a slightly bigger model first, find out which parts are actually useful, and then cut out the rest before deploying it to the real world.
+Methodology
+To obtain the desired output of our research i.e reducing the trainable parameter while minimizing the loss and increasing the  accuracy. We have proposed a 4 stage pipeline. 
+In stage 1 we fine tune the base model of an SLM/LLM using standard Low Rank Adaptation (LoRA). For a pre trained weights 
+ QUOTE 
+, the update is constrained by representing the weight change as a low-rank decomposition 
+ QUOTE 
+, where 
+ QUOTE 
+ and 
+ QUOTE 
+. In this stage, all adapters are initialized to a uniform maximum rank, 
+ QUOTE 
+, establishing the baseline capacity for the model.
+In stage 2 this is the main stage where we use router to find out the desirable rank for a layer. As mentioned above each layer does not contribute equally in generating an output, every layer has a definite role or features it is meant to be extracted. We do not need higher ranks for the layer which have lower contribution in the output so we must reduce the rank for that particular layer and optimize the rank required for each layer.
+ During the training phase we simultaneously feed the input embedding to both the transformer layer and the average pooling. The average pooling condenses the token embedded vectors into a single fixed mathematical context 
+ QUOTE 
+for our RouterThe router, parameterized by weights 
+ QUOTE 
+, acts as a projection function 
+ QUOTE 
+, mapping the context vector into a routing matrix 
+ QUOTE 
+, where 
+ QUOTE 
+ is the total number of targeted layers. Each row of this output matrix corresponds to a specific layer and is subsequently applied as a diagonal scaling matrix within that layer's adapter. 
+To augment the standard task loss, budget penalty is introduced to router
+ QUOTE 
+Where 
+ QUOTE 
+ stands for penalty weight, 
+ QUOTE 
+is the mean of the sum of mask activations, averaged across all layers and the entire batch and 
+ QUOTE 
+ defines the target budget (desired rank across each layers)
+This formulation applies zero penalty if the router achieves an average rank below 
+ QUOTE 
+, applying downward pressure exclusively when the capacity exceeds the target budget. Through end-to-end backpropagation, the router
+s weights learn to map the features of the input context vector to specific layer specializations while adhering to this efficiency constraint.
+Every new input corresponds to a new matrix, so router does not basically learn the rank required for each layer using the matrix but the router's weights learn to map the features of the input context vector to these layer specializations. The static rank is decided based on the average by calculating a single global average of the matrix at the end of the stage 2 training.
+ Dynamic routing incurs computational overhead. During inference  Stage 3 we focus to aggregate the learned dynamic behaviour for each layer in a static blueprint. Post training the routers weight are frozen and we perform calibration passes with the dataset  through the network.  We compute the expected values for the activation to generate a  single global average routing. This matrix represents dataset level probability of the rank required for each individual layers and thus decreasing the overall additional parameters to be used. Finally we binarize the continuous probability distribution matrix M. We decide a pruning threshold 
+ QUOTE 
+. Any value equal to or above the pruning threshold is converted to 1 and any value below the threshold is converted to 0.
+In the matrix after pruning the total no of 1
+s in a row is the optimal rank ri used for that particular layer i. We then create a new heterogeneous ranked LoRA configuration based on the values of ri , transfer the values of the trained weights from the adaptive adapter and entirely discard the router. This creates a custom fitted highly compressed LoRA model capable of zero latency inference
+Experimental Setup
+Dataset and Model: We made our custom JSONL format dataset to evaluate and for validation we reserved 10% of the data. Out of the total samples in the data subset we used 1500 samples for initial learning and 800 samples for the routing and final polishing stages. unsloth/Llama-3.2-1B-Instruct was the base architecture we used, and loaded in 4-bit quantization with a maximum sequence length of 4096 tokens.
+Architecture and Training: Our method targeted all linear projection modules and then we initialized them with a maximum rank of Rmax = 16 and an alpha scaling factor of 32. The configuration of the pipeline stages are as follows:
+Stage 1 (Standard LoRA): We used 2e-4 learning rate for one single epoch and batch size of 8 to train our model in this stage.
+Stage 2 (Dynamic Routing): We used a router with a 256-dimensional MLP bottleneck during this entire phase then we applied a dual learning rate strategy
+1e-3 for th
+Stage 4 (Polish): After pruning,we again ran the model for 1-epoch 
+polish run
+ at a 1e-4 learning rate, making sure that the model recovers to its peak performance. 
+            Hardware: Single 15GB NVIDIA T4 GPU was used to run all the stages.
+C.   Result
+As highlighted in table 1, the proposed RaaLora model is more parameter efficient than existing methods. It shows that the our RaaLora model uses only 6.51 million parameters to train and also achieve similar adaptation, While Standard LoRA and AdaLoRA both use around 11.27 million parameters to train which is around 0.90% of the total model size. RaaLora brought down the total model footprint to just 0.52% this shows that our router assisted pruning mechanism can successfully find and update the most important weights.
+Table 2 is about the generative performance trade-offs between the evaluated models. As it shows that the standard LoRA has slightly higher scores but RaaLoRA is keeping pace with it as AdaLora is far apart from both. Which shows that RaaLoRA proves that it is a highly efficient  and robust alternative. It achieved the lowest evaluation loss (2.0626) along with a strong BERTScore F1 (0.8265). This shows that RaaLora successfully balances high-quality semantic text generation with being highly parameter efficient and outperforming AdaLoRA's continuous pruning approach. 
+The above table 3 shows, RaaLoRA achieves scores better than both of the other existing models. BERTScores are close to Standard LoRA while RaaLoRA has improved highly compared to AdaLoRA. So we can say that RaaLoRA has successfully managed to preserve the semantic meaning of the generated text despite the highly reduced parameter count.
+4 conclusion:
+1.We removed the bottleneck between budget allocation(which adds parameter overhead) and dynamic routing(which adds latency during inference) by pruning dynamic routing of tokens to their ranked  layers during inference so our model learned optimal and layer specific ranks dynamically during training while being entirely specific during deployment(inference)
+2.Although our model has a competitive loss of 2.0626 we only updated 0.86% of the trainable parameters retaining the generalised intelligence of the base model
+3. Our research emphasizes on allowing our highly specialized and dynamically optimized large language model to be integrated in  retail-grade hardware allowing making small enterprises to integrate AI  in drastically more efficient way
+References
+E. J. Hu et al., "LoRA: Low-Rank Adaptation of Large Language Models," in International Conference on Learning Representations (ICLR), 2022.
+Q. Zhang et al., "AdaLoRA: Adaptive Budget Allocation for Parameter-Efficient Fine-Tuning," in International Conference on Learning Representations (ICLR), 2023.
+Z. Li, Y. Su, H. Zhou, Z. Fu, and N. Collier, "Flexi-LoRA with Input-Adaptive Ranks: Efficient Finetuning for Speech and Reasoning Tasks," arXiv preprint arXiv:2605.01959, 2026.
+N. Shazeer et al., "Outrageously Large Neural Networks: The Sparsely-Gated Mixture-of-Experts Layer," arXiv preprint arXiv:1701.06538, 2017.
+ Hu, E. J., et al. (2021). "LoRA: Low-Rank Adaptation of Large Language Models
+ Houlsby, N., et al. (2019). "Parameter-Efficient Transfer Learning for NLP." 
+ Shazeer, N., et al. (2017). "Outrageously Large Neural Networks: The Sparsely-Gated Mixture-of-Experts Layer
+ Jang, E., et al. (2016). "Categorical Reparameterization with Gumbel-Softmax." 
+ Fan, A., et al. (2019). "Reducing Transformer Depth on Demand with Structured Dropout.".
+ Michel, P., et al. (2019). "Are Sixteen Heads Really Better than One?" 
+ Dettmers, T., et al. (2023). "QLoRA: Efficient Finetuning of Quantized LLMs." 
+ Fedus, W., et al. (2022). "Switch Transformers: Scaling to Trillion Parameter Models." 
+. Wang, Y., et al. (2021). "Dynamic Neural Networks: A Survey." 
+ Frankle, J., & Carbin, M. (2018). "The Lottery Ticket Hypothesis." 
+ Molchanov, P., et al. (2019). "Importance Estimation for Neural Network Pruning." 
+ Cai, H., et al. (2019). "Once-for-All: Train One Network and Specialize it for Efficient Deployment." 
+ Zhang, Q., et al. (2023). "Adaptive Budget Allocation for Parameter-Efficient Fine-Tuning." 
+ Lin, J., et al. (2020). "Runtime Neural Routing for Dynamic Inference." 
+ Valipour, M., et al. (2022). "DyLoRA: Parameter Efficient Tuning of Pre-trained Models using Dynamic Search-Free Low-Rank Adaptation." 
+IDATx^
+oLh_U
+w2;v7
+A7Y3'C
+Fi;'T
+H77wt
+=]u Bf
+:P1K3
+:P1K3
+|e>"h
+W@uSi`
+]eW?`
++(\8`
+;_;umv
+Qt.j9
+N$_@(0
+hux[4p
+~0jSgWf
+Sq,8\h
+60`^Us
+i[Fiv
+s7>Wt
+.bn(G
+NW#m3
+o?Ug_TO
+~:F##8
+uG[Fiv@
+1G0WV
+>;D?k
+@a+p?
+}sE?!
+^{p:C
+BXaW?+
+qd3CO
+n#WqG
+9INe|`$
+[OHHHHHHHHHHHH
+ZS;{B
+b|PgmG
+k0lCg
+02p0:M
+z*U-P
+i9],v
+kXcW?
+PC+}tR
+2\A7E
+[e0Fb
+J[GTm
+m*fTm]
+6oUoa
+aBBBBBBBBBBBB
+sU?;c
+sU?;c
+gXgW?
+bU&~w{
+r Q1Z
+?#{QQ
+Mu_5/
+Xx5/>
+mu="X
+wo3n?
+;pE?h
+plP&~
+<i|5h
+:~U>Z?
+w~: J
+lPe8c$
+jGXgW?
+:8tfu
+TveUu
+? XI?
+6@]>,[
+]E>j_
+7_4i 
+7<rE?;
+!}e3*
+AZhp6
+0!!!!!!!!!!!!
+0PLTE
+lIDATx^
+|v.g_d
+!#B*cy
+QR9R$
+c!2*IHY'
+vvqdT
+&q-G*
+sUNzV
+/rdTK
+*y3>a
+b,+UZT
+A*9\f
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<?mso-application progid="Word.Document"?>
+<w:wordDocument xmlns:aml="http://schemas.microsoft.com/aml/2001/core" xmlns:wpc="http://schemas.microsoft.com/office/word/2010/wordprocessingCanvas" xmlns:cx="http://schemas.microsoft.com/office/drawing/2014/chartex" xmlns:cx1="http://schemas.microsoft.com/office/drawing/2015/9/8/chartex" xmlns:cx2="http://schemas.microsoft.com/office/drawing/2015/10/21/chartex" xmlns:cx3="http://schemas.microsoft.com/office/drawing/2016/5/9/chartex" xmlns:cx4="http://schemas.microsoft.com/office/drawing/2016/5/10/chartex" xmlns:cx5="http://schemas.microsoft.com/office/drawing/2016/5/11/chartex" xmlns:cx6="http://schemas.microsoft.com/office/drawing/2016/5/12/chartex" xmlns:cx7="http://schemas.microsoft.com/office/drawing/2016/5/13/chartex" xmlns:cx8="http://schemas.microsoft.com/office/drawing/2016/5/14/chartex" xmlns:cr="http://schemas.microsoft.com/office/comments/2020/reactions" xmlns:dt="uuid:C2F41010-65B3-11d1-A29F-00AA00C14882" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:aink="http://schemas.microsoft.com/office/drawing/2016/ink" xmlns:am3d="http://schemas.microsoft.com/office/drawing/2017/model3d" xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:oel="http://schemas.microsoft.com/office/2019/extlst" xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:w10="urn:schemas-microsoft-com:office:word" xmlns:w="http://schemas.microsoft.com/office/word/2003/wordml" xmlns:w16cei="http://schemas.microsoft.com/office/word/2026/wordml/cei" xmlns:wx="http://schemas.microsoft.com/office/word/2003/auxHint" xmlns:wne="http://schemas.microsoft.com/office/word/2006/wordml" xmlns:wsp="http://schemas.microsoft.com/office/word/2003/wordml/sp2" xmlns:sl="http://schemas.microsoft.com/schemaLibrary/2003/core" w:macrosPresent="no" w:embeddedObjPresent="no" w:ocxPresent="no" xml:space="preserve"><w:ignoreSubtree w:val="http://schemas.microsoft.com/office/word/2003/wordml/sp2"/><o:DocumentProperties><o:Version>16</o:Version></o:DocumentProperties><w:docPr><w:view w:val="print"/><w:zoom w:val="best-fit" w:percent="193"/><w:doNotEmbedSystemFonts/><w:stylePaneFormatFilter w:val="3F01"/><w:defaultTabStop w:val="202"/><w:doNotHyphenateCaps/><w:drawingGridHorizontalSpacing w:val="120"/><w:drawingGridVerticalSpacing w:val="120"/><w:displayHorizontalDrawingGridEvery w:val="0"/><w:displayVerticalDrawingGridEvery w:val="3"/><w:useMarginsForDrawingGridOrigin/><w:punctuationKerning/><w:characterSpacingControl w:val="CompressPunctuation"/><w:pixelsPerInch w:val="72"/><w:validateAgainstSchema/><w:saveInvalidXML w:val="off"/><w:ignoreMixedContent w:val="off"/><w:alwaysShowPlaceholderText w:val="off"/><w:compat><w:breakWrappedTables/><w:snapToGridInCell/><w:wrapTextWithPunct/><w:useAsianBreakRules/><w:dontGrowAutofit/></w:compat><wsp:rsids><wsp:rsidRoot wsp:val="001A13E6"/><wsp:rsid wsp:val="0015028E"/><wsp:rsid wsp:val="001A13E6"/><wsp:rsid wsp:val="00745822"/><wsp:rsid wsp:val="007F61BC"/><wsp:rsid wsp:val="009D197E"/><wsp:rsid wsp:val="00C2692F"/><wsp:rsid wsp:val="00D01553"/><wsp:rsid wsp:val="00DB5735"/><wsp:rsid wsp:val="00E2052D"/></wsp:rsids></w:docPr><w:body><wx:sect><w:p wsp:rsidR="00745822" wsp:rsidRDefault="00745822" wsp:rsidP="00745822"><m:oMathPara><m:oMath><m:sSub><m:sSubPr><m:ctrlPr><w:rPr><w:rFonts w:ascii="Cambria Math" w:fareast="Cambria Math" w:h-ansi="Cambria Math" w:cs="Cambria Math"/><wx:font wx:val="Cambria Math"/><w:sz w:val="24"/><w:sz-cs w:val="24"/></w:rPr></m:ctrlPr></m:sSubPr><m:e><m:r><w:rPr><w:rFonts w:ascii="Cambria Math" w:fareast="Cambria Math" w:h-ansi="Cambria Math" w:cs="Cambria Math"/><wx:font wx:val="Cambria Math"/><w:i/><w:sz w:val="24"/><w:sz-cs w:val="24"/></w:rPr><m:t>W</m:t></m:r></m:e><m:sub><m:r><w:rPr><w:rFonts w:ascii="Cambria Math" w:fareast="Cambria Math" w:h-ansi="Cambria Math" w:cs="Cambria Math"/><wx:font wx:val="Cambria Math"/><w:i/><w:sz w:val="24"/><w:sz-cs w:val="24"/></w:rPr><m:t>0</m:t></m:r></m:sub></m:sSub><m:r><w:rPr><w:rFonts w:ascii="Cambria Math" w:fareast="Cambria Math" w:h-ansi="Cambria Math" w:cs="Cambria Math"/><wx:font wx:val="Cambria Math"/><w:i/><w:sz w:val="24"/><w:sz-cs w:val="24"/></w:rPr><m:t>
+</m:t></m:r><m:sSup><m:sSupPr><m:ctrlPr><w:rPr><w:rFonts w:ascii="Cambria Math" w:fareast="Cambria Math" w:h-ansi="Cambria Math" w:cs="Cambria Math"/><wx:font wx:val="Cambria Math"/><w:sz w:val="24"/><w:sz-cs w:val="24"/></w:rPr></m:ctrlPr></m:sSupPr><m:e><m:r><w:rPr><w:rFonts w:ascii="Cambria Math" w:fareast="Cambria Math" w:h-ansi="Cambria Math" w:cs="Cambria Math"/><wx:font wx:val="Cambria Math"/><w:i/><w:sz w:val="24"/><w:sz-cs w:val="24"/></w:rPr><m:t>R</m:t></m:r></m:e><m:sup><m:r><w:rPr><w:rFonts w:ascii="Cambria Math" w:fareast="Cambria Math" w:h-ansi="Cambria Math" w:cs="Cambria Math"/><wx:font wx:val="Cambria Math"/><w:i/><w:sz w:val="24"/><w:sz-cs w:val="24"/></w:rPr><m:t>d
+k</m:t></m:r></m:sup></m:sSup></m:oMath></m:oMathPara></w:p><w:sectPr wsp:rsidR="00000000"><w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" w:header="720" w:footer="720" w:gutter="0"/><w:cols w:space="720"/></w:sectPr></wx:sect></w:body></w:wordDocument>
+IDAThC
+WS,R7f
+r:N,~
+dvo!:Q
+MK6YE[Qy
+6U|<V
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<?mso-application progid="Word.Document"?>
+<w:wordDocument xmlns:aml="http://schemas.microsoft.com/aml/2001/core" xmlns:wpc="http://schemas.microsoft.com/office/word/2010/wordprocessingCanvas" xmlns:cx="http://schemas.microsoft.com/office/drawing/2014/chartex" xmlns:cx1="http://schemas.microsoft.com/office/drawing/2015/9/8/chartex" xmlns:cx2="http://schemas.microsoft.com/office/drawing/2015/10/21/chartex" xmlns:cx3="http://schemas.microsoft.com/office/drawing/2016/5/9/chartex" xmlns:cx4="http://schemas.microsoft.com/office/drawing/2016/5/10/chartex" xmlns:cx5="http://schemas.microsoft.com/office/drawing/2016/5/11/chartex" xmlns:cx6="http://schemas.microsoft.com/office/drawing/2016/5/12/chartex" xmlns:cx7="http://schemas.microsoft.com/office/drawing/2016/5/13/chartex" xmlns:cx8="http://schemas.microsoft.com/office/drawing/2016/5/14/chartex" xmlns:cr="http://schemas.microsoft.com/office/comments/2020/reactions" xmlns:dt="uuid:C2F41010-65B3-11d1-A29F-00AA00C14882" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:aink="http://schemas.microsoft.com/office/drawing/2016/ink" xmlns:am3d="http://schemas.microsoft.com/office/drawing/2017/model3d" xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:oel="http://schemas.microsoft.com/office/2019/extlst" xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:w10="urn:schemas-microsoft-com:office:word" xmlns:w="http://schemas.microsoft.com/office/word/2003/wordml" xmlns:w16cei="http://schemas.microsoft.com/office/word/2026/wordml/cei" xmlns:wx="http://schemas.microsoft.com/office/word/2003/auxHint" xmlns:wne="http://schemas.microsoft.com/office/word/2006/wordml" xmlns:wsp="http://schemas.microsoft.com/office/word/2003/wordml/sp2" xmlns:sl="http://schemas.microsoft.com/schemaLibrary/2003/core" w:macrosPresent="no" w:embeddedObjPresent="no" w:ocxPresent="no" xml:space="preserve"><w:ignoreSubtree w:val="http://schemas.microsoft.com/office/word/2003/wordml/sp2"/><o:DocumentProperties><o:Version>16</o:Version></o:DocumentProperties><w:docPr><w:view w:val="print"/><w:zoom w:val="best-fit" w:percent="193"/><w:doNotEmbedSystemFonts/><w:stylePaneFormatFilter w:val="3F01"/><w:defaultTabStop w:val="202"/><w:doNotHyphenateCaps/><w:drawingGridHorizontalSpacing w:val="120"/><w:drawingGridVerticalSpacing w:val="120"/><w:displayHorizontalDrawingGridEvery w:val="0"/><w:displayVerticalDrawingGridEvery w:val="3"/><w:useMarginsForDrawingGridOrigin/><w:punctuationKerning/><w:characterSpacingControl w:val="CompressPunctuation"/><w:pixelsPerInch w:val="72"/><w:validateAgainstSchema/><w:saveInvalidXML w:val="off"/><w:ignoreMixedContent w:val="off"/><w:alwaysShowPlaceholderText w:val="off"/><w:compat><w:breakWrappedTables/><w:snapToGridInCell/><w:wrapTextWithPunct/><w:useAsianBreakRules/><w:dontGrowAutofit/></w:compat><wsp:rsids><wsp:rsidRoot wsp:val="001A13E6"/><wsp:rsid wsp:val="0015028E"/><wsp:rsid wsp:val="001A13E6"/><wsp:rsid wsp:val="00745822"/><wsp:rsid wsp:val="007F61BC"/><wsp:rsid wsp:val="009D197E"/><wsp:rsid wsp:val="00C2692F"/><wsp:rsid wsp:val="00D01553"/><wsp:rsid wsp:val="00DB5735"/><wsp:rsid wsp:val="00E2052D"/></wsp:rsids></w:docPr><w:body><wx:sect><w:p wsp:rsidR="00745822" wsp:rsidRDefault="00745822" wsp:rsidP="00745822"><m:oMathPara><m:oMath><m:sSub><m:sSubPr><m:ctrlPr><w:rPr><w:rFonts w:ascii="Cambria Math" w:fareast="Cambria Math" w:h-ansi="Cambria Math" w:cs="Cambria Math"/><wx:font wx:val="Cambria Math"/><w:sz w:val="24"/><w:sz-cs w:val="24"/></w:rPr></m:ctrlPr></m:sSubPr><m:e><m:r><w:rPr><w:rFonts w:ascii="Cambria Math" w:fareast="Cambria Math" w:h-ansi="Cambria Math" w:cs="Cambria Math"/><wx:font wx:val="Cambria Math"/><w:i/><w:sz w:val="24"/><w:sz-cs w:val="24"/></w:rPr><m:t>W</m:t></m:r></m:e><m:sub><m:r><w:rPr><w:rFonts w:ascii="Cambria Math" w:fareast="Cambria Math" w:h-ansi="Cambria Math" w:cs="Cambria Math"/><wx:font wx:val="Cambria Math"/><w:i/><w:sz w:val="24"/><w:sz-cs w:val="24"/></w:rPr><m:t>0</m:t></m:r></m:sub></m:sSub><m:r><w:rPr><w:rFonts w:ascii="Cambria Math" w:fareast="Cambria Math" w:h-ansi="Cambria Math" w:cs="Cambria Math"/><wx:font wx:val="Cambria Math"/><w:i/><w:sz w:val="24"/><w:sz-cs w:val="24"/></w:rPr><m:t>
+</m:t></m:r><m:sSup><m:sSupPr><m:ctrlPr><w:rPr><w:rFonts w:ascii="Cambria Math" w:fareast="Cambria Math" w:h-ansi="Cambria Math" w:cs="Cambria Math"/><wx:font wx:val="Cambria Math"/><w:sz w:val="24"/><w:sz-cs w:val="24"/></w:rPr></m:ctrlPr></m:sSupPr><m:e><m:r><w:rPr><w:rFonts w:ascii="Cambria Math" w:fareast="Cambria Math" w:h-ansi="Cambria Math" w:cs="Cambria Math"/><wx:font wx:val="Cambria Math"/><w:i/><w:sz w:val="24"/><w:sz-cs w:val="24"/></w:rPr><m:t>R</m:t></m:r></m:e><m:sup><m:r><w:rPr><w:rFonts w:ascii="Cambria Math" w:fareast="Cambria Math" w:h-ansi="Cambria Math" w:cs="Cambria Math"/><wx:font wx:val="Cambria Math"/><w:i/><w:sz w:val="24"/><w:sz-cs w:val="24"/></w:rPr><m:t>d
+k</m:t></m:r></m:sup></m:sSup></m:oMath></m:oMathPara></w:p><w:sectPr wsp:rsidR="00000000"><w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" w:header="720" w:footer="720" w:gutter="0"/><w:cols w:space="720"/></w:sectPr></wx:sect></w:body></w:wordDocument>
+IDAThC
+WS,R7f
+r:N,~
+dvo!:Q
+MK6YE[Qy
+6U|<V
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<?mso-application progid="Word.Document"?>
+<w:wordDocument xmlns:aml="http://schemas.microsoft.com/aml/2001/core" xmlns:wpc="http://schemas.microsoft.com/office/word/2010/wordprocessingCanvas" xmlns:cx="http://schemas.microsoft.com/office/drawing/2014/chartex" xmlns:cx1="http://schemas.microsoft.com/office/drawing/2015/9/8/chartex" xmlns:cx2="http://schemas.microsoft.com/office/drawing/2015/10/21/chartex" xmlns:cx3="http://schemas.microsoft.com/office/drawing/2016/5/9/chartex" xmlns:cx4="http://schemas.microsoft.com/office/drawing/2016/5/10/chartex" xmlns:cx5="http://schemas.microsoft.com/office/drawing/2016/5/11/chartex" xmlns:cx6="http://schemas.microsoft.com/office/drawing/2016/5/12/chartex" xmlns:cx7="http://schemas.microsoft.com/office/drawing/2016/5/13/chartex" xmlns:cx8="http://schemas.microsoft.com/office/drawing/2016/5/14/chartex" xmlns:cr="http://schemas.microsoft.com/office/comments/2020/reactions" xmlns:dt="uuid:C2F41010-65B3-11d1-A29F-00AA00C14882" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:aink="http://schemas.microsoft.com/office/drawing/2016/ink" xmlns:am3d="http://schemas.microsoft.com/office/drawing/2017/model3d" xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:oel="http://schemas.microsoft.com/office/2019/extlst" xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:w10="urn:schemas-microsoft-com:office:word" xmlns:w="http://schemas.microsoft.com/office/word/2003/wordml" xmlns:w16cei="http://schemas.microsoft.com/office/word/2026/wordml/cei" xmlns:wx="http://schemas.microsoft.com/office/word/2003/auxHint" xmlns:wne="http://schemas.microsoft.com/office/word/2006/wordml" xmlns:wsp="http://schemas.microsoft.com/office/word/2003/wordml/sp2" xmlns:sl="http://schemas.microsoft.com/schemaLibrary/2003/core" w:macrosPresent="no" w:embeddedObjPresent="no" w:ocxPresent="no" xml:space="preserve"><w:ignoreSubtree w:val="http://schemas.microsoft.com/office/word/2003/wordml/sp2"/><o:DocumentProperties><o:Version>16</o:Version></o:DocumentProperties><w:docPr><w:view w:val="print"/><w:zoom w:val="best-fit" w:percent="193"/><w:doNotEmbedSystemFonts/><w:stylePaneFormatFilter w:val="3F01"/><w:defaultTabStop w:val="202"/><w:doNotHyphenateCaps/><w:drawingGridHorizontalSpacing w:val="120"/><w:drawingGridVerticalSpacing w:val="120"/><w:displayHorizontalDrawingGridEvery w:val="0"/><w:displayVerticalDrawingGridEvery w:val="3"/><w:useMarginsForDrawingGridOrigin/><w:punctuationKerning/><w:characterSpacingControl w:val="CompressPunctuation"/><w:pixelsPerInch w:val="72"/><w:validateAgainstSchema/><w:saveInvalidXML w:val="off"/><w:ignoreMixedContent w:val="off"/><w:alwaysShowPlaceholderText w:val="off"/><w:compat><w:breakWrappedTables/><w:snapToGridInCell/><w:wrapTextWithPunct/><w:useAsianBreakRules/><w:dontGrowAutofit/></w:compat><wsp:rsids><wsp:rsidRoot wsp:val="001A13E6"/><wsp:rsid wsp:val="0015028E"/><wsp:rsid wsp:val="001A13E6"/><wsp:rsid wsp:val="007F61BC"/><wsp:rsid wsp:val="009D197E"/><wsp:rsid wsp:val="00C2692F"/><wsp:rsid wsp:val="00D01553"/><wsp:rsid wsp:val="00DB5735"/><wsp:rsid wsp:val="00E2052D"/><wsp:rsid wsp:val="00FE3FBE"/></wsp:rsids></w:docPr><w:body><wx:sect><w:p wsp:rsidR="00FE3FBE" wsp:rsidRDefault="00FE3FBE" wsp:rsidP="00FE3FBE"><m:oMathPara><m:oMath><m:r><w:rPr><w:rFonts w:ascii="Cambria Math" w:h-ansi="Cambria Math"/><wx:font wx:val="Cambria Math"/><w:i/></w:rPr><m:t>
+</m:t></m:r><m:r><w:rPr><w:rFonts w:ascii="Cambria Math" w:fareast="Cambria Math" w:h-ansi="Cambria Math" w:cs="Cambria Math"/><wx:font wx:val="Cambria Math"/><w:i/><w:sz w:val="24"/><w:sz-cs w:val="24"/></w:rPr><m:t>W=BA</m:t></m:r></m:oMath></m:oMathPara></w:p><w:sectPr wsp:rsidR="00000000"><w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" w:header="720" w:footer="720" w:gutter="0"/><w:cols w:space="720"/></w:sectPr></wx:sect></w:body></w:wordDocument>
+IDATXG
+kkW+Y
+w$KQ9
+OcOO@r
+#UFpMs
+wmk~8
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<?mso-application progid="Word.Document"?>
+<w:wordDocument xmlns:aml="http://schemas.microsoft.com/aml/2001/core" xmlns:wpc="http://schemas.microsoft.com/office/word/2010/wordprocessingCanvas" xmlns:cx="http://schemas.microsoft.com/office/drawing/2014/chartex" xmlns:cx1="http://schemas.microsoft.com/office/drawing/2015/9/8/chartex" xmlns:cx2="http://schemas.microsoft.com/office/drawing/2015/10/21/chartex" xmlns:cx3="http://schemas.microsoft.com/office/drawing/2016/5/9/chartex" xmlns:cx4="http://schemas.microsoft.com/office/drawing/2016/5/10/chartex" xmlns:cx5="http://schemas.microsoft.com/office/drawing/2016/5/11/chartex" xmlns:cx6="http://schemas.microsoft.com/office/drawing/2016/5/12/chartex" xmlns:cx7="http://schemas.microsoft.com/office/drawing/2016/5/13/chartex" xmlns:cx8="http://schemas.microsoft.com/office/drawing/2016/5/14/chartex" xmlns:cr="http://schemas.microsoft.com/office/comments/2020/reactions" xmlns:dt="uuid:C2F41010-65B3-11d1-A29F-00AA00C14882" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:aink="http://schemas.microsoft.com/office/drawing/2016/ink" xmlns:am3d="http://schemas.microsoft.com/office/drawing/2017/model3d" xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:oel="http://schemas.microsoft.com/office/2019/extlst" xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:w10="urn:schemas-microsoft-com:office:word" xmlns:w="http://schemas.microsoft.com/office/word/2003/wordml" xmlns:w16cei="http://schemas.microsoft.com/office/word/2026/wordml/cei" xmlns:wx="http://schemas.microsoft.com/office/word/2003/auxHint" xmlns:wne="http://schemas.microsoft.com/office/word/2006/wordml" xmlns:wsp="http://schemas.microsoft.com/office/word/2003/wordml/sp2" xmlns:sl="http://schemas.microsoft.com/schemaLibrary/2003/core" w:macrosPresent="no" w:embeddedObjPresent="no" w:ocxPresent="no" xml:space="preserve"><w:ignoreSubtree w:val="http://schemas.microsoft.com/office/word/2003/wordml/sp2"/><o:DocumentProperties><o:Version>16</o:Version></o:DocumentProperties><w:docPr><w:view w:val="print"/><w:zoom w:val="best-fit" w:percent="193"/><w:doNotEmbedSystemFonts/><w:stylePaneFormatFilter w:val="3F01"/><w:defaultTabStop w:val="202"/><w:doNotHyphenateCaps/><w:drawingGridHorizontalSpacing w:val="120"/><w:drawingGridVerticalSpacing w:val="120"/><w:displayHorizontalDrawingGridEvery w:val="0"/><w:displayVerticalDrawingGridEvery w:val="3"/><w:useMarginsForDrawingGridOrigin/><w:punctuationKerning/><w:characterSpacingControl w:val="CompressPunctuation"/><w:pixelsPerInch w:val="72"/><w:validateAgainstSchema/><w:saveInvalidXML w:val="off"/><w:ignoreMixedContent w:val="off"/><w:alwaysShowPlaceholderText w:val="off"/><w:compat><w:breakWrappedTables/><w:snapToGridInCell/><w:wrapTextWithPunct/><w:useAsianBreakRules/><w:dontGrowAutofit/></w:compat><wsp:rsids><wsp:rsidRoot wsp:val="001A13E6"/><wsp:rsid wsp:val="0015028E"/><wsp:rsid wsp:val="001A13E6"/><wsp:rsid wsp:val="007F61BC"/><wsp:rsid wsp:val="009D197E"/><wsp:rsid wsp:val="00C2692F"/><wsp:rsid wsp:val="00D01553"/><wsp:rsid wsp:val="00DB5735"/><wsp:rsid wsp:val="00E2052D"/><wsp:rsid wsp:val="00FE3FBE"/></wsp:rsids></w:docPr><w:body><wx:sect><w:p wsp:rsidR="00FE3FBE" wsp:rsidRDefault="00FE3FBE" wsp:rsidP="00FE3FBE"><m:oMathPara><m:oMath><m:r><w:rPr><w:rFonts w:ascii="Cambria Math" w:h-ansi="Cambria Math"/><wx:font wx:val="Cambria Math"/><w:i/></w:rPr><m:t>
+</m:t></m:r><m:r><w:rPr><w:rFonts w:ascii="Cambria Math" w:fareast="Cambria Math" w:h-ansi="Cambria Math" w:cs="Cambria Math"/><wx:font wx:val="Cambria Math"/><w:i/><w:sz w:val="24"/><w:sz-cs w:val="24"/></w:rPr><m:t>W=BA</m:t></m:r></m:oMath></m:oMathPara></w:p><w:sectPr wsp:rsidR="00000000"><w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" w:header="720" w:footer="720" w:gutter="0"/><w:cols w:space="720"/></w:sectPr></wx:sect></w:body></w:wordDocument>
+IDATXG
+kkW+Y
+w$KQ9
+OcOO@r
+#UFpMs
+wmk~8
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<?mso-application progid="Word.Document"?>
+<w:wordDocument xmlns:aml="http://schemas.microsoft.com/aml/2001/core" xmlns:wpc="http://schemas.microsoft.com/office/word/2010/wordprocessingCanvas" xmlns:cx="http://schemas.microsoft.com/office/drawing/2014/chartex" xmlns:cx1="http://schemas.microsoft.com/office/drawing/2015/9/8/chartex" xmlns:cx2="http://schemas.microsoft.com/office/drawing/2015/10/21/chartex" xmlns:cx3="http://schemas.microsoft.com/office/drawing/2016/5/9/chartex" xmlns:cx4="http://schemas.microsoft.com/office/drawing/2016/5/10/chartex" xmlns:cx5="http://schemas.microsoft.com/office/drawing/2016/5/11/chartex" xmlns:cx6="http://schemas.microsoft.com/office/drawing/2016/5/12/chartex" xmlns:cx7="http://schemas.microsoft.com/office/drawing/2016/5/13/chartex" xmlns:cx8="http://schemas.microsoft.com/office/drawing/2016/5/14/chartex" xmlns:cr="http://schemas.microsoft.com/office/comments/2020/reactions" xmlns:dt="uuid:C2F41010-65B3-11d1-A29F-00AA00C14882" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:aink="http://schemas.microsoft.com/office/drawing/2016/ink" xmlns:am3d="http://schemas.microsoft.com/office/drawing/2017/model3d" xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:oel="http://schemas.microsoft.com/office/2019/extlst" xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:w10="urn:schemas-microsoft-com:office:word" xmlns:w="http://schemas.microsoft.com/office/word/2003/wordml" xmlns:w16cei="http://schemas.microsoft.com/office/word/2026/wordml/cei" xmlns:wx="http://schemas.microsoft.com/office/word/2003/auxHint" xmlns:wne="http://schemas.microsoft.com/office/word/2006/wordml" xmlns:wsp="http://schemas.microsoft.com/office/word/2003/wordml/sp2" xmlns:sl="http://schemas.microsoft.com/schemaLibrary/2003/core" w:macrosPresent="no" w:embeddedObjPresent="no" w:ocxPresent="no" xml:space="preserve"><w:ignoreSubtree w:val="http://schemas.microsoft.com/office/word/2003/wordml/sp2"/><o:DocumentProperties><o:Version>16</o:Version></o:DocumentProperties><w:docPr><w:view w:val="print"/><w:zoom w:val="best-fit" w:percent="193"/><w:doNotEmbedSystemFonts/><w:stylePaneFormatFilter w:val="3F01"/><w:defaultTabStop w:val="202"/><w:doNotHyphenateCaps/><w:drawingGridHorizontalSpacing w:val="120"/><w:drawingGridVerticalSpacing w:val="120"/><w:displayHorizontalDrawingGridEvery w:val="0"/><w:displayVerticalDrawingGridEvery w:val="3"/><w:useMarginsForDrawingGridOrigin/><w:punctuationKerning/><w:characterSpacingControl w:val="CompressPunctuation"/><w:pixelsPerInch w:val="72"/><w:validateAgainstSchema/><w:saveInvalidXML w:val="off"/><w:ignoreMixedContent w:val="off"/><w:alwaysShowPlaceholderText w:val="off"/><w:compat><w:breakWrappedTables/><w:snapToGridInCell/><w:wrapTextWithPunct/><w:useAsianBreakRules/><w:dontGrowAutofit/></w:compat><wsp:rsids><wsp:rsidRoot wsp:val="001A13E6"/><wsp:rsid wsp:val="0015028E"/><wsp:rsid wsp:val="001A13E6"/><wsp:rsid wsp:val="005D63C5"/><wsp:rsid wsp:val="007F61BC"/><wsp:rsid wsp:val="009D197E"/><wsp:rsid wsp:val="00C2692F"/><wsp:rsid wsp:val="00D01553"/><wsp:rsid wsp:val="00DB5735"/><wsp:rsid wsp:val="00E2052D"/></wsp:rsids></w:docPr><w:body><wx:sect><w:p wsp:rsidR="005D63C5" wsp:rsidRDefault="005D63C5" wsp:rsidP="005D63C5"><m:oMathPara><m:oMath><m:r><w:rPr><w:rFonts w:ascii="Cambria Math" w:fareast="Cambria Math" w:h-ansi="Cambria Math" w:cs="Cambria Math"/><wx:font wx:val="Cambria Math"/><w:i/><w:sz w:val="24"/><w:sz-cs w:val="24"/></w:rPr><m:t>B
+</m:t></m:r><m:sSup><m:sSupPr><m:ctrlPr><w:rPr><w:rFonts w:ascii="Cambria Math" w:fareast="Cambria Math" w:h-ansi="Cambria Math" w:cs="Cambria Math"/><wx:font wx:val="Cambria Math"/><w:sz w:val="24"/><w:sz-cs w:val="24"/></w:rPr></m:ctrlPr></m:sSupPr><m:e><m:r><w:rPr><w:rFonts w:ascii="Cambria Math" w:fareast="Cambria Math" w:h-ansi="Cambria Math" w:cs="Cambria Math"/><wx:font wx:val="Cambria Math"/><w:i/><w:sz w:val="24"/><w:sz-cs w:val="24"/></w:rPr><m:t>R</m:t></m:r></m:e><m:sup><m:r><w:rPr><w:rFonts w:ascii="Cambria Math" w:fareast="Cambria Math" w:h-ansi="Cambria Math" w:cs="Cambria Math"/><wx:font wx:val="Cambria Math"/><w:i/><w:sz w:val="24"/><w:sz-cs w:val="24"/></w:rPr><m:t>d
+</m:t></m:r><m:sSub><m:sSubPr><m:ctrlPr><w:rPr><w:rFonts w:ascii="Cambria Math" w:fareast="Cambria Math" w:h-ansi="Cambria Math" w:cs="Cambria Math"/><wx:font wx:val="Cambria Math"/><w:sz w:val="24"/><w:sz-cs w:val="24"/></w:rPr></m:ctrlPr></m:sSubPr><m:e><m:r><w:rPr><w:rFonts w:ascii="Cambria Math" w:fareast="Cambria Math" w:h-ansi="Cambria Math" w:cs="Cambria Math"/><wx:font wx:val="Cambria Math"/><w:i/><w:sz w:val="24"/><w:sz-cs w:val="24"/></w:rPr><m:t>R</m:t></m:r></m:e><m:sub><m:r><w:rPr><w:rFonts w:ascii="Cambria Math" w:fareast="Cambria Math" w:h-ansi="Cambria Math" w:cs="Cambria Math"/><wx:font wx:val="Cambria Math"/><w:i/><w:sz w:val="24"/><w:sz-cs w:val="24"/></w:rPr><m:t>max</m:t></m:r></m:sub></m:sSub></m:sup></m:sSup></m:oMath></m:oMathPara></w:p><w:sectPr wsp:rsidR="00000000"><w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" w:header="720" w:footer="720" w:gutter="0"/><w:cols w:space="720"/></w:sectPr></wx:sect></w:body></w:wordDocument>
+IDAThC
+y0a0a
+9MGeV
+4V:985
+}y;T7
++q74eX
+4O:<K
+i;|19
+w?3.]
+KBTmm]=|
+Z1j1\
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<?mso-application progid="Word.Document"?>
+<w:wordDocument xmlns:aml="http://schemas.microsoft.com/aml/2001/core" xmlns:wpc="http://schemas.microsoft.com/office/word/2010/wordprocessingCanvas" xmlns:cx="http://schemas.microsoft.com/office/drawing/2014/chartex" xmlns:cx1="http://schemas.microsoft.com/office/drawing/2015/9/8/chartex" xmlns:cx2="http://schemas.microsoft.com/office/drawing/2015/10/21/chartex" xmlns:cx3="http://schemas.microsoft.com/office/drawing/2016/5/9/chartex" xmlns:cx4="http://schemas.microsoft.com/office/drawing/2016/5/10/chartex" xmlns:cx5="http://schemas.microsoft.com/office/drawing/2016/5/11/chartex" xmlns:cx6="http://schemas.microsoft.com/office/drawing/2016/5/12/chartex" xmlns:cx7="http://schemas.microsoft.com/office/drawing/2016/5/13/chartex" xmlns:cx8="http://schemas.microsoft.com/office/drawing/2016/5/14/chartex" xmlns:cr="http://schemas.microsoft.com/office/comments/2020/reactions" xmlns:dt="uuid:C2F41010-65B3-11d1-A29F-00AA00C14882" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:aink="http://schemas.microsoft.com/office/drawing/2016/ink" xmlns:am3d="http://schemas.microsoft.com/office/drawing/2017/model3d" xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:oel="http://schemas.microsoft.com/office/2019/extlst" xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:w10="urn:schemas-microsoft-com:office:word" xmlns:w="http://schemas.microsoft.com/office/word/2003/wordml" xmlns:w16cei="http://schemas.microsoft.com/office/word/2026/wordml/cei" xmlns:wx="http://schemas.microsoft.com/office/word/2003/auxHint" xmlns:wne="http://schemas.microsoft.com/office/word/2006/wordml" xmlns:wsp="http://schemas.microsoft.com/office/word/2003/wordml/sp2" xmlns:sl="http://schemas.microsoft.com/schemaLibrary/2003/core" w:macrosPresent="no" w:embeddedObjPresent="no" w:ocxPresent="no" xml:space="preserve"><w:ignoreSubtree w:val="http://schemas.microsoft.com/office/word/2003/wordml/sp2"/><o:DocumentProperties><o:Version>16</o:Version></o:DocumentProperties><w:docPr><w:view w:val="print"/><w:zoom w:val="best-fit" w:percent="193"/><w:doNotEmbedSystemFonts/><w:stylePaneFormatFilter w:val="3F01"/><w:defaultTabStop w:val="202"/><w:doNotHyphenateCaps/><w:drawingGridHorizontalSpacing w:val="120"/><w:drawingGridVerticalSpacing w:val="120"/><w:displayHorizontalDrawingGridEvery w:val="0"/><w:displayVerticalDrawingGridEvery w:val="3"/><w:useMarginsForDrawingGridOrigin/><w:punctuationKerning/><w:characterSpacingControl w:val="CompressPunctuation"/><w:pixelsPerInch w:val="72"/><w:validateAgainstSchema/><w:saveInvalidXML w:val="off"/><w:ignoreMixedContent w:val="off"/><w:alwaysShowPlaceholderText w:val="off"/><w:compat><w:breakWrappedTables/><w:snapToGridInCell/><w:wrapTextWithPunct/><w:useAsianBreakRules/><w:dontGrowAutofit/></w:compat><wsp:rsids><wsp:rsidRoot wsp:val="001A13E6"/><wsp:rsid wsp:val="0015028E"/><wsp:rsid wsp:val="001A13E6"/><wsp:rsid wsp:val="005D63C5"/><wsp:rsid wsp:val="007F61BC"/><wsp:rsid wsp:val="009D197E"/><wsp:rsid wsp:val="00C2692F"/><wsp:rsid wsp:val="00D01553"/><wsp:rsid wsp:val="00DB5735"/><wsp:rsid wsp:val="00E2052D"/></wsp:rsids></w:docPr><w:body><wx:sect><w:p wsp:rsidR="005D63C5" wsp:rsidRDefault="005D63C5" wsp:rsidP="005D63C5"><m:oMathPara><m:oMath><m:r><w:rPr><w:rFonts w:ascii="Cambria Math" w:fareast="Cambria Math" w:h-ansi="Cambria Math" w:cs="Cambria Math"/><wx:font wx:val="Cambria Math"/><w:i/><w:sz w:val="24"/><w:sz-cs w:val="24"/></w:rPr><m:t>B
+</m:t></m:r><m:sSup><m:sSupPr><m:ctrlPr><w:rPr><w:rFonts w:ascii="Cambria Math" w:fareast="Cambria Math" w:h-ansi="Cambria Math" w:cs="Cambria Math"/><wx:font wx:val="Cambria Math"/><w:sz w:val="24"/><w:sz-cs w:val="24"/></w:rPr></m:ctrlPr></m:sSupPr><m:e><m:r><w:rPr><w:rFonts w:ascii="Cambria Math" w:fareast="Cambria Math" w:h-ansi="Cambria Math" w:cs="Cambria Math"/><wx:font wx:val="Cambria Math"/><w:i/><w:sz w:val="24"/><w:sz-cs w:val="24"/></w:rPr><m:t>R</m:t></m:r></m:e><m:sup><m:r><w:rPr><w:rFonts w:ascii="Cambria Math" w:fareast="Cambria Math" w:h-ansi="Cambria Math" w:cs="Cambria Math"/><wx:font wx:val="Cambria Math"/><w:i/><w:sz w:val="24"/><w:sz-cs w:val="24"/></w:rPr><m:t>d
+</m:t></m:r><m:sSub><m:sSubPr><m:ctrlPr><w:rPr><w:rFonts w:ascii="Cambria Math" w:fareast="Cambria Math" w:h-ansi="Cambria Math" w:cs="Cambria Math"/><wx:font wx:val="Cambria Math"/><w:sz w:val="24"/><w:sz-cs w:val="24"/></w:rPr></m:ctrlPr></m:sSubPr><m:e><m:r><w:rPr><w:rFonts w:ascii="Cambria Math" w:fareast="Cambria Math" w:h-ansi="Cambria Math" w:cs="Cambria Math"/><wx:font wx:val="Cambria Math"/><w:i/><w:sz w:val="24"/><w:sz-cs w:val="24"/></w:rPr><m:t>R</m:t></m:r></m:e><m:sub><m:r><w:rPr><w:rFonts w:ascii="Cambria Math" w:fareast="Cambria Math" w:h-ansi="Cambria Math" w:cs="Cambria Math"/><wx:font wx:val="Cambria Math"/><w:i/><w:sz w:val="24"/><w:sz-cs w:val="24"/></w:rPr><m:t>max</m:t></m:r></m:sub></m:sSub></m:sup></m:sSup></m:oMath></m:oMathPara></w:p><w:sectPr wsp:rsidR="00000000"><w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" w:header="720" w:footer="720" w:gutter="0"/><w:cols w:space="720"/></w:sectPr></wx:sect></w:body></w:wordDocument>
+IDAThC
+y0a0a
+9MGeV
+4V:985
+}y;T7
++q74eX
+4O:<K
+i;|19
+w?3.]
+KBTmm]=|
+Z1j1\
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<?mso-application progid="Word.Document"?>
+<w:wordDocument xmlns:aml="http://schemas.microsoft.com/aml/2001/core" xmlns:wpc="http://schemas.microsoft.com/office/word/2010/wordprocessingCanvas" xmlns:cx="http://schemas.microsoft.com/office/drawing/2014/chartex" xmlns:cx1="http://schemas.microsoft.com/office/drawing/2015/9/8/chartex" xmlns:cx2="http://schemas.microsoft.com/office/drawing/2015/10/21/chartex" xmlns:cx3="http://schemas.microsoft.com/office/drawing/2016/5/9/chartex" xmlns:cx4="http://schemas.microsoft.com/office/drawing/2016/5/10/chartex" xmlns:cx5="http://schemas.microsoft.com/office/drawing/2016/5/11/chartex" xmlns:cx6="http://schemas.microsoft.com/office/drawing/2016/5/12/chartex" xmlns:cx7="http://schemas.microsoft.com/office/drawing/2016/5/13/chartex" xmlns:cx8="http://schemas.microsoft.com/office/drawing/2016/5/14/chartex" xmlns:cr="http://schemas.microsoft.com/office/comments/2020/reactions" xmlns:dt="uuid:C2F41010-65B3-11d1-A29F-00AA00C14882" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:aink="http://schemas.microsoft.com/office/drawing/2016/ink" xmlns:am3d="http://schemas.microsoft.com/office/drawing/2017/model3d" xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:oel="http://schemas.microsoft.com/office/2019/extlst" xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:w10="urn:schemas-microsoft-com:office:word" xmlns:w="http://schemas.microsoft.com/office/word/2003/wordml" xmlns:w16cei="http://schemas.microsoft.com/office/word/2026/wordml/cei" xmlns:wx="http://schemas.microsoft.com/office/word/2003/auxHint" xmlns:wne="http://schemas.microsoft.com/office/word/2006/wordml" xmlns:wsp="http://schemas.microsoft.com/office/word/2003/wordml/sp2" xmlns:sl="http://schemas.microsoft.com/schemaLibrary/2003/core" w:macrosPresent="no" w:embeddedObjPresent="no" w:ocxPresent="no" xml:space="preserve"><w:ignoreSubtree w:val="http://schemas.microsoft.com/office/word/2003/wordml/sp2"/><o:DocumentProperties><o:Version>16</o:Version></o:DocumentProperties><w:docPr><w:view w:val="print"/><w:zoom w:val="best-fit" w:percent="193"/><w:doNotEmbedSystemFonts/><w:stylePaneFormatFilter w:val="3F01"/><w:defaultTabStop w:val="202"/><w:doNotHyphenateCaps/><w:drawingGridHorizontalSpacing w:val="120"/><w:drawingGridVerticalSpacing w:val="120"/><w:displayHorizontalDrawingGridEvery w:val="0"/><w:displayVerticalDrawingGridEvery w:val="3"/><w:useMarginsForDrawingGridOrigin/><w:punctuationKerning/><w:characterSpacingControl w:val="CompressPunctuation"/><w:pixelsPerInch w:val="72"/><w:validateAgainstSchema/><w:saveInvalidXML w:val="off"/><w:ignoreMixedContent w:val="off"/><w:alwaysShowPlaceholderText w:val="off"/><w:compat><w:breakWrappedTables/><w:snapToGridInCell/><w:wrapTextWithPunct/><w:useAsianBreakRules/><w:dontGrowAutofit/></w:compat><wsp:rsids><wsp:rsidRoot wsp:val="001A13E6"/><wsp:rsid wsp:val="0015028E"/><wsp:rsid wsp:val="001A13E6"/><wsp:rsid wsp:val="007F61BC"/><wsp:rsid wsp:val="009B6BD1"/><wsp:rsid wsp:val="009D197E"/><wsp:rsid wsp:val="00C2692F"/><wsp:rsid wsp:val="00D01553"/><wsp:rsid wsp:val="00DB5735"/><wsp:rsid wsp:val="00E2052D"/></wsp:rsids></w:docPr><w:body><wx:sect><w:p wsp:rsidR="009B6BD1" wsp:rsidRDefault="009B6BD1" wsp:rsidP="009B6BD1"><m:oMathPara><m:oMath><m:r><w:rPr><w:rFonts w:ascii="Cambria Math" w:fareast="Cambria Math" w:h-ansi="Cambria Math" w:cs="Cambria Math"/><wx:font wx:val="Cambria Math"/><w:i/><w:sz w:val="24"/><w:sz-cs w:val="24"/></w:rPr><m:t>A
+</m:t></m:r><m:sSup><m:sSupPr><m:ctrlPr><w:rPr><w:rFonts w:ascii="Cambria Math" w:fareast="Cambria Math" w:h-ansi="Cambria Math" w:cs="Cambria Math"/><wx:font wx:val="Cambria Math"/><w:sz w:val="24"/><w:sz-cs w:val="24"/></w:rPr></m:ctrlPr></m:sSupPr><m:e><m:r><w:rPr><w:rFonts w:ascii="Cambria Math" w:fareast="Cambria Math" w:h-ansi="Cambria Math" w:cs="Cambria Math"/><wx:font wx:val="Cambria Math"/><w:i/><w:sz w:val="24"/><w:sz-cs w:val="24"/></w:rPr><m:t>R</m:t></m:r></m:e><m:sup><m:sSub><m:sSubPr><m:ctrlPr><w:rPr><w:rFonts w:ascii="Cambria Math" w:fareast="Cambria Math" w:h-ansi="Cambria Math" w:cs="Cambria Math"/><wx:font wx:val="Cambria Math"/><w:sz w:val="24"/><w:sz-cs w:val="24"/></w:rPr></m:ctrlPr></m:sSubPr><m:e><m:r><w:rPr><w:rFonts w:ascii="Cambria Math" w:fareast="Cambria Math" w:h-ansi="Cambria Math" w:cs="Cambria Math"/><wx:font wx:val="Cambria Math"/><w:i/><w:sz w:val="24"/><w:sz-cs w:val="24"/></w:rPr><m:t>R</m:t></m:r></m:e><m:sub><m:r><w:rPr><w:rFonts w:ascii="Cambria Math" w:fareast="Cambria Math" w:h-ansi="Cambria Math" w:cs="Cambria Math"/><wx:font wx:val="Cambria Math"/><w:i/><w:sz w:val="24"/><w:sz-cs w:val="24"/></w:rPr><m:t>max</m:t></m:r></m:sub></m:sSub><m:r><w:rPr><w:rFonts w:ascii="Cambria Math" w:fareast="Cambria Math" w:h-ansi="Cambria Math" w:cs="Cambria Math"/><wx:font wx:val="Cambria Math"/><w:i/><w:sz w:val="24"/><w:sz-cs w:val="24"/></w:rPr><m:t>
+k</m:t></m:r></m:sup></m:sSup></m:oMath></m:oMathPara></w:p><w:sectPr wsp:rsidR="00000000"><w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" w:header="720" w:footer="720" w:gutter="0"/><w:cols w:space="720"/></w:sectPr></wx:sect></w:body></w:wordDocument>
+IDAThC
+: K'?
+(KyGZ
+F"5aA
+`+2Iz
+)vag;
+xgD9}
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<?mso-application progid="Word.Document"?>
+<w:wordDocument xmlns:aml="http://schemas.microsoft.com/aml/2001/core" xmlns:wpc="http://schemas.microsoft.com/office/word/2010/wordprocessingCanvas" xmlns:cx="http://schemas.microsoft.com/office/drawing/2014/chartex" xmlns:cx1="http://schemas.microsoft.com/office/drawing/2015/9/8/chartex" xmlns:cx2="http://schemas.microsoft.com/office/drawing/2015/10/21/chartex" xmlns:cx3="http://schemas.microsoft.com/office/drawing/2016/5/9/chartex" xmlns:cx4="http://schemas.microsoft.com/office/drawing/2016/5/10/chartex" xmlns:cx5="http://schemas.microsoft.com/office/drawing/2016/5/11/chartex" xmlns:cx6="http://schemas.microsoft.com/office/drawing/2016/5/12/chartex" xmlns:cx7="http://schemas.microsoft.com/office/drawing/2016/5/13/chartex" xmlns:cx8="http://schemas.microsoft.com/office/drawing/2016/5/14/chartex" xmlns:cr="http://schemas.microsoft.com/office/comments/2020/reactions" xmlns:dt="uuid:C2F41010-65B3-11d1-A29F-00AA00C14882" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:aink="http://schemas.microsoft.com/office/drawing/2016/ink" xmlns:am3d="http://schemas.microsoft.com/office/drawing/2017/model3d" xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:oel="http://schemas.microsoft.com/office/2019/extlst" xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:w10="urn:schemas-microsoft-com:office:word" xmlns:w="http://schemas.microsoft.com/office/word/2003/wordml" xmlns:w16cei="http://schemas.microsoft.com/office/word/2026/wordml/cei" xmlns:wx="http://schemas.microsoft.com/office/word/2003/auxHint" xmlns:wne="http://schemas.microsoft.com/office/word/2006/wordml" xmlns:wsp="http://schemas.microsoft.com/office/word/2003/wordml/sp2" xmlns:sl="http://schemas.microsoft.com/schemaLibrary/2003/core" w:macrosPresent="no" w:embeddedObjPresent="no" w:ocxPresent="no" xml:space="preserve"><w:ignoreSubtree w:val="http://schemas.microsoft.com/office/word/2003/wordml/sp2"/><o:DocumentProperties><o:Version>16</o:Version></o:DocumentProperties><w:docPr><w:view w:val="print"/><w:zoom w:val="best-fit" w:percent="193"/><w:doNotEmbedSystemFonts/><w:stylePaneFormatFilter w:val="3F01"/><w:defaultTabStop w:val="202"/><w:doNotHyphenateCaps/><w:drawingGridHorizontalSpacing w:val="120"/><w:drawingGridVerticalSpacing w:val="120"/><w:displayHorizontalDrawingGridEvery w:val="0"/><w:displayVerticalDrawingGridEvery w:val="3"/><w:useMarginsForDrawingGridOrigin/><w:punctuationKerning/><w:characterSpacingControl w:val="CompressPunctuation"/><w:pixelsPerInch w:val="72"/><w:validateAgainstSchema/><w:saveInvalidXML w:val="off"/><w:ignoreMixedContent w:val="off"/><w:alwaysShowPlaceholderText w:val="off"/><w:compat><w:breakWrappedTables/><w:snapToGridInCell/><w:wrapTextWithPunct/><w:useAsianBreakRules/><w:dontGrowAutofit/></w:compat><wsp:rsids><wsp:rsidRoot wsp:val="001A13E6"/><wsp:rsid wsp:val="0015028E"/><wsp:rsid wsp:val="001A13E6"/><wsp:rsid wsp:val="007F61BC"/><wsp:rsid wsp:val="009B6BD1"/><wsp:rsid wsp:val="009D197E"/><wsp:rsid wsp:val="00C2692F"/><wsp:rsid wsp:val="00D01553"/><wsp:rsid wsp:val="00DB5735"/><wsp:rsid wsp:val="00E2052D"/></wsp:rsids></w:docPr><w:body><wx:sect><w:p wsp:rsidR="009B6BD1" wsp:rsidRDefault="009B6BD1" wsp:rsidP="009B6BD1"><m:oMathPara><m:oMath><m:r><w:rPr><w:rFonts w:ascii="Cambria Math" w:fareast="Cambria Math" w:h-ansi="Cambria Math" w:cs="Cambria Math"/><wx:font wx:val="Cambria Math"/><w:i/><w:sz w:val="24"/><w:sz-cs w:val="24"/></w:rPr><m:t>A
+</m:t></m:r><m:sSup><m:sSupPr><m:ctrlPr><w:rPr><w:rFonts w:ascii="Cambria Math" w:fareast="Cambria Math" w:h-ansi="Cambria Math" w:cs="Cambria Math"/><wx:font wx:val="Cambria Math"/><w:sz w:val="24"/><w:sz-cs w:val="24"/></w:rPr></m:ctrlPr></m:sSupPr><m:e><m:r><w:rPr><w:rFonts w:ascii="Cambria Math" w:fareast="Cambria Math" w:h-ansi="Cambria Math" w:cs="Cambria Math"/><wx:font wx:val="Cambria Math"/><w:i/><w:sz w:val="24"/><w:sz-cs w:val="24"/></w:rPr><m:t>R</m:t></m:r></m:e><m:sup><m:sSub><m:sSubPr><m:ctrlPr><w:rPr><w:rFonts w:ascii="Cambria Math" w:fareast="Cambria Math" w:h-ansi="Cambria Math" w:cs="Cambria Math"/><wx:font wx:val="Cambria Math"/><w:sz w:val="24"/><w:sz-cs w:val="24"/></w:rPr></m:ctrlPr></m:sSubPr><m:e><m:r><w:rPr><w:rFonts w:ascii="Cambria Math" w:fareast="Cambria Math" w:h-ansi="Cambria Math" w:cs="Cambria Math"/><wx:font wx:val="Cambria Math"/><w:i/><w:sz w:val="24"/><w:sz-cs w:val="24"/></w:rPr><m:t>R</m:t></m:r></m:e><m:sub><m:r><w:rPr><w:rFonts w:ascii="Cambria Math" w:fareast="Cambria Math" w:h-ansi="Cambria Math" w:cs="Cambria Math"/><wx:font wx:val="Cambria Math"/><w:i/><w:sz w:val="24"/><w:sz-cs w:val="24"/></w:rPr><m:t>max</m:t></m:r></m:sub></m:sSub><m:r><w:rPr><w:rFonts w:ascii="Cambria Math" w:fareast="Cambria Math" w:h-ansi="Cambria Math" w:cs="Cambria Math"/><wx:font wx:val="Cambria Math"/><w:i/><w:sz w:val="24"/><w:sz-cs w:val="24"/></w:rPr><m:t>
+k</m:t></m:r></m:sup></m:sSup></m:oMath></m:oMathPara></w:p><w:sectPr wsp:rsidR="00000000"><w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" w:header="720" w:footer="720" w:gutter="0"/><w:cols w:space="720"/></w:sectPr></wx:sect></w:body></w:wordDocument>
+IDAThC
+: K'?
+(KyGZ
+F"5aA
+`+2Iz
+)vag;
+xgD9}
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<?mso-application progid="Word.Document"?>
+<w:wordDocument xmlns:aml="http://schemas.microsoft.com/aml/2001/core" xmlns:wpc="http://schemas.microsoft.com/office/word/2010/wordprocessingCanvas" xmlns:cx="http://schemas.microsoft.com/office/drawing/2014/chartex" xmlns:cx1="http://schemas.microsoft.com/office/drawing/2015/9/8/chartex" xmlns:cx2="http://schemas.microsoft.com/office/drawing/2015/10/21/chartex" xmlns:cx3="http://schemas.microsoft.com/office/drawing/2016/5/9/chartex" xmlns:cx4="http://schemas.microsoft.com/office/drawing/2016/5/10/chartex" xmlns:cx5="http://schemas.microsoft.com/office/drawing/2016/5/11/chartex" xmlns:cx6="http://schemas.microsoft.com/office/drawing/2016/5/12/chartex" xmlns:cx7="http://schemas.microsoft.com/office/drawing/2016/5/13/chartex" xmlns:cx8="http://schemas.microsoft.com/office/drawing/2016/5/14/chartex" xmlns:cr="http://schemas.microsoft.com/office/comments/2020/reactions" xmlns:dt="uuid:C2F41010-65B3-11d1-A29F-00AA00C14882" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:aink="http://schemas.microsoft.com/office/drawing/2016/ink" xmlns:am3d="http://schemas.microsoft.com/office/drawing/2017/model3d" xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:oel="http://schemas.microsoft.com/office/2019/extlst" xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:w10="urn:schemas-microsoft-com:office:word" xmlns:w="http://schemas.microsoft.com/office/word/2003/wordml" xmlns:w16cei="http://schemas.microsoft.com/office/word/2026/wordml/cei" xmlns:wx="http://schemas.microsoft.com/office/word/2003/auxHint" xmlns:wne="http://schemas.microsoft.com/office/word/2006/wordml" xmlns:wsp="http://schemas.microsoft.com/office/word/2003/wordml/sp2" xmlns:sl="http://schemas.microsoft.com/schemaLibrary/2003/core" w:macrosPresent="no" w:embeddedObjPresent="no" w:ocxPresent="no" xml:space="preserve"><w:ignoreSubtree w:val="http://schemas.microsoft.com/office/word/2003/wordml/sp2"/><o:DocumentProperties><o:Version>16</o:Version></o:DocumentProperties><w:docPr><w:view w:val="print"/><w:zoom w:val="best-fit" w:percent="193"/><w:doNotEmbedSystemFonts/><w:stylePaneFormatFilter w:val="3F01"/><w:defaultTabStop w:val="202"/><w:doNotHyphenateCaps/><w:drawingGridHorizontalSpacing w:val="120"/><w:drawingGridVerticalSpacing w:val="120"/><w:displayHorizontalDrawingGridEvery w:val="0"/><w:displayVerticalDrawingGridEvery w:val="3"/><w:useMarginsForDrawingGridOrigin/><w:punctuationKerning/><w:characterSpacingControl w:val="CompressPunctuation"/><w:pixelsPerInch w:val="72"/><w:validateAgainstSchema/><w:saveInvalidXML w:val="off"/><w:ignoreMixedContent w:val="off"/><w:alwaysShowPlaceholderText w:val="off"/><w:compat><w:breakWrappedTables/><w:snapToGridInCell/><w:wrapTextWithPunct/><w:useAsianBreakRules/><w:dontGrowAutofit/></w:compat><wsp:rsids><wsp:rsidRoot wsp:val="001A13E6"/><wsp:rsid wsp:val="0015028E"/><wsp:rsid wsp:val="001A13E6"/><wsp:rsid wsp:val="007F61BC"/><wsp:rsid wsp:val="009D197E"/><wsp:rsid wsp:val="00C2692F"/><wsp:rsid wsp:val="00D01553"/><wsp:rsid wsp:val="00D301D7"/><wsp:rsid wsp:val="00DB5735"/><wsp:rsid wsp:val="00E2052D"/></wsp:rsids></w:docPr><w:body><wx:sect><w:p wsp:rsidR="00D301D7" wsp:rsidRDefault="00D301D7" wsp:rsidP="00D301D7"><m:oMathPara><m:oMath><m:sSub><m:sSubPr><m:ctrlPr><w:rPr><w:rFonts w:ascii="Cambria Math" w:fareast="Cambria Math" w:h-ansi="Cambria Math" w:cs="Cambria Math"/><wx:font wx:val="Cambria Math"/><w:sz w:val="24"/><w:sz-cs w:val="24"/></w:rPr></m:ctrlPr></m:sSubPr><m:e><m:r><w:rPr><w:rFonts w:ascii="Cambria Math" w:fareast="Cambria Math" w:h-ansi="Cambria Math" w:cs="Cambria Math"/><wx:font wx:val="Cambria Math"/><w:i/><w:sz w:val="24"/><w:sz-cs w:val="24"/></w:rPr><m:t>R</m:t></m:r></m:e><m:sub><m:r><w:rPr><w:rFonts w:ascii="Cambria Math" w:fareast="Cambria Math" w:h-ansi="Cambria Math" w:cs="Cambria Math"/><wx:font wx:val="Cambria Math"/><w:i/><w:sz w:val="24"/><w:sz-cs w:val="24"/></w:rPr><m:t>max</m:t></m:r></m:sub></m:sSub></m:oMath></m:oMathPara></w:p><w:sectPr wsp:rsidR="00000000"><w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" w:header="720" w:footer="720" w:gutter="0"/><w:cols w:space="720"/></w:sectPr></wx:sect></w:body></w:wordDocument>
+FIDATXG
+kKT[UTu
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<?mso-application progid="Word.Document"?>
+<w:wordDocument xmlns:aml="http://schemas.microsoft.com/aml/2001/core" xmlns:wpc="http://schemas.microsoft.com/office/word/2010/wordprocessingCanvas" xmlns:cx="http://schemas.microsoft.com/office/drawing/2014/chartex" xmlns:cx1="http://schemas.microsoft.com/office/drawing/2015/9/8/chartex" xmlns:cx2="http://schemas.microsoft.com/office/drawing/2015/10/21/chartex" xmlns:cx3="http://schemas.microsoft.com/office/drawing/2016/5/9/chartex" xmlns:cx4="http://schemas.microsoft.com/office/drawing/2016/5/10/chartex" xmlns:cx5="http://schemas.microsoft.com/office/drawing/2016/5/11/chartex" xmlns:cx6="http://schemas.microsoft.com/office/drawing/2016/5/12/chartex" xmlns:cx7="http://schemas.microsoft.com/office/drawing/2016/5/13/chartex" xmlns:cx8="http://schemas.microsoft.com/office/drawing/2016/5/14/chartex" xmlns:cr="http://schemas.microsoft.com/office/comments/2020/reactions" xmlns:dt="uuid:C2F41010-65B3-11d1-A29F-00AA00C14882" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:aink="http://schemas.microsoft.com/office/drawing/2016/ink" xmlns:am3d="http://schemas.microsoft.com/office/drawing/2017/model3d" xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:oel="http://schemas.microsoft.com/office/2019/extlst" xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:w10="urn:schemas-microsoft-com:office:word" xmlns:w="http://schemas.microsoft.com/office/word/2003/wordml" xmlns:w16cei="http://schemas.microsoft.com/office/word/2026/wordml/cei" xmlns:wx="http://schemas.microsoft.com/office/word/2003/auxHint" xmlns:wne="http://schemas.microsoft.com/office/word/2006/wordml" xmlns:wsp="http://schemas.microsoft.com/office/word/2003/wordml/sp2" xmlns:sl="http://schemas.microsoft.com/schemaLibrary/2003/core" w:macrosPresent="no" w:embeddedObjPresent="no" w:ocxPresent="no" xml:space="preserve"><w:ignoreSubtree w:val="http://schemas.microsoft.com/office/word/2003/wordml/sp2"/><o:DocumentProperties><o:Version>16</o:Version></o:DocumentProperties><w:docPr><w:view w:val="print"/><w:zoom w:val="best-fit" w:percent="193"/><w:doNotEmbedSystemFonts/><w:stylePaneFormatFilter w:val="3F01"/><w:defaultTabStop w:val="202"/><w:doNotHyphenateCaps/><w:drawingGridHorizontalSpacing w:val="120"/><w:drawingGridVerticalSpacing w:val="120"/><w:displayHorizontalDrawingGridEvery w:val="0"/><w:displayVerticalDrawingGridEvery w:val="3"/><w:useMarginsForDrawingGridOrigin/><w:punctuationKerning/><w:characterSpacingControl w:val="CompressPunctuation"/><w:pixelsPerInch w:val="72"/><w:validateAgainstSchema/><w:saveInvalidXML w:val="off"/><w:ignoreMixedContent w:val="off"/><w:alwaysShowPlaceholderText w:val="off"/><w:compat><w:breakWrappedTables/><w:snapToGridInCell/><w:wrapTextWithPunct/><w:useAsianBreakRules/><w:dontGrowAutofit/></w:compat><wsp:rsids><wsp:rsidRoot wsp:val="001A13E6"/><wsp:rsid wsp:val="0015028E"/><wsp:rsid wsp:val="001A13E6"/><wsp:rsid wsp:val="007F61BC"/><wsp:rsid wsp:val="009D197E"/><wsp:rsid wsp:val="00C2692F"/><wsp:rsid wsp:val="00D01553"/><wsp:rsid wsp:val="00D301D7"/><wsp:rsid wsp:val="00DB5735"/><wsp:rsid wsp:val="00E2052D"/></wsp:rsids></w:docPr><w:body><wx:sect><w:p wsp:rsidR="00D301D7" wsp:rsidRDefault="00D301D7" wsp:rsidP="00D301D7"><m:oMathPara><m:oMath><m:sSub><m:sSubPr><m:ctrlPr><w:rPr><w:rFonts w:ascii="Cambria Math" w:fareast="Cambria Math" w:h-ansi="Cambria Math" w:cs="Cambria Math"/><wx:font wx:val="Cambria Math"/><w:sz w:val="24"/><w:sz-cs w:val="24"/></w:rPr></m:ctrlPr></m:sSubPr><m:e><m:r><w:rPr><w:rFonts w:ascii="Cambria Math" w:fareast="Cambria Math" w:h-ansi="Cambria Math" w:cs="Cambria Math"/><wx:font wx:val="Cambria Math"/><w:i/><w:sz w:val="24"/><w:sz-cs w:val="24"/></w:rPr><m:t>R</m:t></m:r></m:e><m:sub><m:r><w:rPr><w:rFonts w:ascii="Cambria Math" w:fareast="Cambria Math" w:h-ansi="Cambria Math" w:cs="Cambria Math"/><wx:font wx:val="Cambria Math"/><w:i/><w:sz w:val="24"/><w:sz-cs w:val="24"/></w:rPr><m:t>max</m:t></m:r></m:sub></m:sSub></m:oMath></m:oMathPara></w:p><w:sectPr wsp:rsidR="00000000"><w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" w:header="720" w:footer="720" w:gutter="0"/><w:cols w:space="720"/></w:sectPr></wx:sect></w:body></w:wordDocument>
+FIDATXG
+kKT[UTu
+ $.' ",#
+(7),01444
+'9=82<.342
+!22222222222222222222222222222222222222222222222222
+%&'()*456789:CDEFGHIJSTUVWXYZcdefghijstuvwxyz
+&'()*56789:CDEFGHIJSTUVWXYZcdefghijstuvwxyz
+F)1K@
+s<TSj
+CuBVN
+]Er?j
+<_oo$
+]Er?j
+@4R(!
+wP}@9
+N``Ua
+cq,_im.
+V.<Aqe5
+-U,[e
+74/R(
+BmB+t
+[sk#F
+T7C|#
+ZZxz}^
+[G/mg-
+xoRc+.
+-Kxm"
+cGf$ ''
+yroR?
+]jHu;k
+sKiey
+TwC|#
++^b,axT
+(u}s_
+S^bgg
+[j62y
+{s]hV
+&U~6y
+h|;~t}7
+zdU}[
+I#i=9
+JRcD7
+d:Ae?C
+-m<;ig
+2Z=f4X
+Qc{eH
+R:W[I
+LqKPQ
+G.Jpq
+ROr}j
+0f2K4
+Hgs",
+K4mm(
+Ee9R2
+\wC|#
+QEjfs^8
+GLKou"
+1I,1N
+VTwBxG
+T5[q%
+t~Tl_
+t~Tl_
+':jL(
+nl^=A
+UTxF2
+bEYWk
+}Gc\4
+h,$do
+H5,G7yg
+V%*9!
+ZD6[^M#F
+-nm<Pa
+]]rGw
+rFF2:
++mwR>
+)A m;
+Z\x[P
+:@C(#
+D5[+3k
+\8R0d
+0}=)i
+GzZ`p
+/5]+R62
+y_u=A
+kycEFG
+]]rGw
+7im#C
+sKM*9
+1+Esl
+=}q[~?
+D\u`8
+;Y]tW
+]]rCw
+=+_Cm
+|@M<J~
+~V`NO
+2mONQj
+osy<2
+3]]iC
+eqs4rE
+,Q DQ
+]]rGw
+Muonc
+~dKtm
+)>!;#
+,/nb1O<
+]]rGw
+kS8&7
+VutW)
+tRMA&u
+3_me4
+j?{#{l
+cHCt]
+LvW:W
+-:}[A
+OO1rG
+3(`Yz
+T{dqZ
+d0F#E
+YJoGC
+N;dW7
+Y6kwp
+XGuR;g8
+[I*M *
+kI}0H
+0Qol|
+H^GTA
+~ kI!
+i3^^x
+F$P9_z
+@2f}[#
+V6I"'+
+t~Tl_
+t~Tl_
+t~Tl_
+t~Tl_
+t~Tl_
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<?mso-application progid="Word.Document"?>
+<w:wordDocument xmlns:aml="http://schemas.microsoft.com/aml/2001/core" xmlns:wpc="http://schemas.microsoft.com/office/word/2010/wordprocessingCanvas" xmlns:cx="http://schemas.microsoft.com/office/drawing/2014/chartex" xmlns:cx1="http://schemas.microsoft.com/office/drawing/2015/9/8/chartex" xmlns:cx2="http://schemas.microsoft.com/office/drawing/2015/10/21/chartex" xmlns:cx3="http://schemas.microsoft.com/office/drawing/2016/5/9/chartex" xmlns:cx4="http://schemas.microsoft.com/office/drawing/2016/5/10/chartex" xmlns:cx5="http://schemas.microsoft.com/office/drawing/2016/5/11/chartex" xmlns:cx6="http://schemas.microsoft.com/office/drawing/2016/5/12/chartex" xmlns:cx7="http://schemas.microsoft.com/office/drawing/2016/5/13/chartex" xmlns:cx8="http://schemas.microsoft.com/office/drawing/2016/5/14/chartex" xmlns:cr="http://schemas.microsoft.com/office/comments/2020/reactions" xmlns:dt="uuid:C2F41010-65B3-11d1-A29F-00AA00C14882" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:aink="http://schemas.microsoft.com/office/drawing/2016/ink" xmlns:am3d="http://schemas.microsoft.com/office/drawing/2017/model3d" xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:oel="http://schemas.microsoft.com/office/2019/extlst" xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:w10="urn:schemas-microsoft-com:office:word" xmlns:w="http://schemas.microsoft.com/office/word/2003/wordml" xmlns:w16cei="http://schemas.microsoft.com/office/word/2026/wordml/cei" xmlns:wx="http://schemas.microsoft.com/office/word/2003/auxHint" xmlns:wne="http://schemas.microsoft.com/office/word/2006/wordml" xmlns:wsp="http://schemas.microsoft.com/office/word/2003/wordml/sp2" xmlns:sl="http://schemas.microsoft.com/schemaLibrary/2003/core" w:macrosPresent="no" w:embeddedObjPresent="no" w:ocxPresent="no" xml:space="preserve"><w:ignoreSubtree w:val="http://schemas.microsoft.com/office/word/2003/wordml/sp2"/><o:DocumentProperties><o:Version>16</o:Version></o:DocumentProperties><w:docPr><w:view w:val="print"/><w:zoom w:val="best-fit" w:percent="193"/><w:doNotEmbedSystemFonts/><w:stylePaneFormatFilter w:val="3F01"/><w:defaultTabStop w:val="202"/><w:doNotHyphenateCaps/><w:drawingGridHorizontalSpacing w:val="120"/><w:drawingGridVerticalSpacing w:val="120"/><w:displayHorizontalDrawingGridEvery w:val="0"/><w:displayVerticalDrawingGridEvery w:val="3"/><w:useMarginsForDrawingGridOrigin/><w:punctuationKerning/><w:characterSpacingControl w:val="CompressPunctuation"/><w:pixelsPerInch w:val="72"/><w:validateAgainstSchema/><w:saveInvalidXML w:val="off"/><w:ignoreMixedContent w:val="off"/><w:alwaysShowPlaceholderText w:val="off"/><w:compat><w:breakWrappedTables/><w:snapToGridInCell/><w:wrapTextWithPunct/><w:useAsianBreakRules/><w:dontGrowAutofit/></w:compat><wsp:rsids><wsp:rsidRoot wsp:val="001A13E6"/><wsp:rsid wsp:val="0015028E"/><wsp:rsid wsp:val="001A13E6"/><wsp:rsid wsp:val="004432DB"/><wsp:rsid wsp:val="007F61BC"/><wsp:rsid wsp:val="009D197E"/><wsp:rsid wsp:val="00C2692F"/><wsp:rsid wsp:val="00D01553"/><wsp:rsid wsp:val="00DB5735"/><wsp:rsid wsp:val="00E2052D"/></wsp:rsids></w:docPr><w:body><wx:sect><w:p wsp:rsidR="004432DB" wsp:rsidRDefault="004432DB" wsp:rsidP="004432DB"><m:oMathPara><m:oMath><m:r><w:rPr><w:rFonts w:ascii="Cambria Math" w:fareast="Cambria Math" w:h-ansi="Cambria Math" w:cs="Cambria Math"/><wx:font wx:val="Cambria Math"/><w:i/><w:sz w:val="24"/><w:sz-cs w:val="24"/></w:rPr><m:t>c
+</m:t></m:r><m:sSup><m:sSupPr><m:ctrlPr><w:rPr><w:rFonts w:ascii="Cambria Math" w:fareast="Cambria Math" w:h-ansi="Cambria Math" w:cs="Cambria Math"/><wx:font wx:val="Cambria Math"/><w:sz w:val="24"/><w:sz-cs w:val="24"/></w:rPr></m:ctrlPr></m:sSupPr><m:e><m:r><w:rPr><w:rFonts w:ascii="Cambria Math" w:fareast="Cambria Math" w:h-ansi="Cambria Math" w:cs="Cambria Math"/><wx:font wx:val="Cambria Math"/><w:i/><w:sz w:val="24"/><w:sz-cs w:val="24"/></w:rPr><m:t>R</m:t></m:r></m:e><m:sup><m:r><w:rPr><w:rFonts w:ascii="Cambria Math" w:fareast="Cambria Math" w:h-ansi="Cambria Math" w:cs="Cambria Math"/><wx:font wx:val="Cambria Math"/><w:i/><w:sz w:val="24"/><w:sz-cs w:val="24"/></w:rPr><m:t>n</m:t></m:r></m:sup></m:sSup><m:r><w:rPr><w:rFonts w:ascii="Cambria Math" w:fareast="Cambria Math" w:h-ansi="Cambria Math" w:cs="Cambria Math"/><wx:font wx:val="Cambria Math"/><w:i/><w:sz w:val="24"/><w:sz-cs w:val="24"/></w:rPr><m:t> </m:t></m:r></m:oMath></m:oMathPara></w:p><w:sectPr wsp:rsidR="00000000"><w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" w:header="720" w:footer="720" w:gutter="0"/><w:cols w:space="720"/></w:sectPr></wx:sect></w:body></w:wordDocument>
+LIDATXG
+pvmj|
+]P/3f
+&[OU@3
+;-LJm
+Y'=q26
+B{~#o
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<?mso-application progid="Word.Document"?>
+<w:wordDocument xmlns:aml="http://schemas.microsoft.com/aml/2001/core" xmlns:wpc="http://schemas.microsoft.com/office/word/2010/wordprocessingCanvas" xmlns:cx="http://schemas.microsoft.com/office/drawing/2014/chartex" xmlns:cx1="http://schemas.microsoft.com/office/drawing/2015/9/8/chartex" xmlns:cx2="http://schemas.microsoft.com/office/drawing/2015/10/21/chartex" xmlns:cx3="http://schemas.microsoft.com/office/drawing/2016/5/9/chartex" xmlns:cx4="http://schemas.microsoft.com/office/drawing/2016/5/10/chartex" xmlns:cx5="http://schemas.microsoft.com/office/drawing/2016/5/11/chartex" xmlns:cx6="http://schemas.microsoft.com/office/drawing/2016/5/12/chartex" xmlns:cx7="http://schemas.microsoft.com/office/drawing/2016/5/13/chartex" xmlns:cx8="http://schemas.microsoft.com/office/drawing/2016/5/14/chartex" xmlns:cr="http://schemas.microsoft.com/office/comments/2020/reactions" xmlns:dt="uuid:C2F41010-65B3-11d1-A29F-00AA00C14882" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:aink="http://schemas.microsoft.com/office/drawing/2016/ink" xmlns:am3d="http://schemas.microsoft.com/office/drawing/2017/model3d" xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:oel="http://schemas.microsoft.com/office/2019/extlst" xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:w10="urn:schemas-microsoft-com:office:word" xmlns:w="http://schemas.microsoft.com/office/word/2003/wordml" xmlns:w16cei="http://schemas.microsoft.com/office/word/2026/wordml/cei" xmlns:wx="http://schemas.microsoft.com/office/word/2003/auxHint" xmlns:wne="http://schemas.microsoft.com/office/word/2006/wordml" xmlns:wsp="http://schemas.microsoft.com/office/word/2003/wordml/sp2" xmlns:sl="http://schemas.microsoft.com/schemaLibrary/2003/core" w:macrosPresent="no" w:embeddedObjPresent="no" w:ocxPresent="no" xml:space="preserve"><w:ignoreSubtree w:val="http://schemas.microsoft.com/office/word/2003/wordml/sp2"/><o:DocumentProperties><o:Version>16</o:Version></o:DocumentProperties><w:docPr><w:view w:val="print"/><w:zoom w:val="best-fit" w:percent="193"/><w:doNotEmbedSystemFonts/><w:stylePaneFormatFilter w:val="3F01"/><w:defaultTabStop w:val="202"/><w:doNotHyphenateCaps/><w:drawingGridHorizontalSpacing w:val="120"/><w:drawingGridVerticalSpacing w:val="120"/><w:displayHorizontalDrawingGridEvery w:val="0"/><w:displayVerticalDrawingGridEvery w:val="3"/><w:useMarginsForDrawingGridOrigin/><w:punctuationKerning/><w:characterSpacingControl w:val="CompressPunctuation"/><w:pixelsPerInch w:val="72"/><w:validateAgainstSchema/><w:saveInvalidXML w:val="off"/><w:ignoreMixedContent w:val="off"/><w:alwaysShowPlaceholderText w:val="off"/><w:compat><w:breakWrappedTables/><w:snapToGridInCell/><w:wrapTextWithPunct/><w:useAsianBreakRules/><w:dontGrowAutofit/></w:compat><wsp:rsids><wsp:rsidRoot wsp:val="001A13E6"/><wsp:rsid wsp:val="0015028E"/><wsp:rsid wsp:val="001A13E6"/><wsp:rsid wsp:val="004432DB"/><wsp:rsid wsp:val="007F61BC"/><wsp:rsid wsp:val="009D197E"/><wsp:rsid wsp:val="00C2692F"/><wsp:rsid wsp:val="00D01553"/><wsp:rsid wsp:val="00DB5735"/><wsp:rsid wsp:val="00E2052D"/></wsp:rsids></w:docPr><w:body><wx:sect><w:p wsp:rsidR="004432DB" wsp:rsidRDefault="004432DB" wsp:rsidP="004432DB"><m:oMathPara><m:oMath><m:r><w:rPr><w:rFonts w:ascii="Cambria Math" w:fareast="Cambria Math" w:h-ansi="Cambria Math" w:cs="Cambria Math"/><wx:font wx:val="Cambria Math"/><w:i/><w:sz w:val="24"/><w:sz-cs w:val="24"/></w:rPr><m:t>c
+</m:t></m:r><m:sSup><m:sSupPr><m:ctrlPr><w:rPr><w:rFonts w:ascii="Cambria Math" w:fareast="Cambria Math" w:h-ansi="Cambria Math" w:cs="Cambria Math"/><wx:font wx:val="Cambria Math"/><w:sz w:val="24"/><w:sz-cs w:val="24"/></w:rPr></m:ctrlPr></m:sSupPr><m:e><m:r><w:rPr><w:rFonts w:ascii="Cambria Math" w:fareast="Cambria Math" w:h-ansi="Cambria Math" w:cs="Cambria Math"/><wx:font wx:val="Cambria Math"/><w:i/><w:sz w:val="24"/><w:sz-cs w:val="24"/></w:rPr><m:t>R</m:t></m:r></m:e><m:sup><m:r><w:rPr><w:rFonts w:ascii="Cambria Math" w:fareast="Cambria Math" w:h-ansi="Cambria Math" w:cs="Cambria Math"/><wx:font wx:val="Cambria Math"/><w:i/><w:sz w:val="24"/><w:sz-cs w:val="24"/></w:rPr><m:t>n</m:t></m:r></m:sup></m:sSup><m:r><w:rPr><w:rFonts w:ascii="Cambria Math" w:fareast="Cambria Math" w:h-ansi="Cambria Math" w:cs="Cambria Math"/><wx:font wx:val="Cambria Math"/><w:i/><w:sz w:val="24"/><w:sz-cs w:val="24"/></w:rPr><m:t> </m:t></m:r></m:oMath></m:oMathPara></w:p><w:sectPr wsp:rsidR="00000000"><w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" w:header="720" w:footer="720" w:gutter="0"/><w:cols w:space="720"/></w:sectPr></wx:sect></w:body></w:wordDocument>
+LIDATXG
+pvmj|
+]P/3f
+&[OU@3
+;-LJm
+Y'=q26
+B{~#o
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<?mso-application progid="Word.Document"?>
+<w:wordDocument xmlns:aml="http://schemas.microsoft.com/aml/2001/core" xmlns:wpc="http://schemas.microsoft.com/office/word/2010/wordprocessingCanvas" xmlns:cx="http://schemas.microsoft.com/office/drawing/2014/chartex" xmlns:cx1="http://schemas.microsoft.com/office/drawing/2015/9/8/chartex" xmlns:cx2="http://schemas.microsoft.com/office/drawing/2015/10/21/chartex" xmlns:cx3="http://schemas.microsoft.com/office/drawing/2016/5/9/chartex" xmlns:cx4="http://schemas.microsoft.com/office/drawing/2016/5/10/chartex" xmlns:cx5="http://schemas.microsoft.com/office/drawing/2016/5/11/chartex" xmlns:cx6="http://schemas.microsoft.com/office/drawing/2016/5/12/chartex" xmlns:cx7="http://schemas.microsoft.com/office/drawing/2016/5/13/chartex" xmlns:cx8="http://schemas.microsoft.com/office/drawing/2016/5/14/chartex" xmlns:cr="http://schemas.microsoft.com/office/comments/2020/reactions" xmlns:dt="uuid:C2F41010-65B3-11d1-A29F-00AA00C14882" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:aink="http://schemas.microsoft.com/office/drawing/2016/ink" xmlns:am3d="http://schemas.microsoft.com/office/drawing/2017/model3d" xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:oel="http://schemas.microsoft.com/office/2019/extlst" xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:w10="urn:schemas-microsoft-com:office:word" xmlns:w="http://schemas.microsoft.com/office/word/2003/wordml" xmlns:w16cei="http://schemas.microsoft.com/office/word/2026/wordml/cei" xmlns:wx="http://schemas.microsoft.com/office/word/2003/auxHint" xmlns:wne="http://schemas.microsoft.com/office/word/2006/wordml" xmlns:wsp="http://schemas.microsoft.com/office/word/2003/wordml/sp2" xmlns:sl="http://schemas.microsoft.com/schemaLibrary/2003/core" w:macrosPresent="no" w:embeddedObjPresent="no" w:ocxPresent="no" xml:space="preserve"><w:ignoreSubtree w:val="http://schemas.microsoft.com/office/word/2003/wordml/sp2"/><o:DocumentProperties><o:Version>16</o:Version></o:DocumentProperties><w:docPr><w:view w:val="print"/><w:zoom w:val="best-fit" w:percent="193"/><w:doNotEmbedSystemFonts/><w:stylePaneFormatFilter w:val="3F01"/><w:defaultTabStop w:val="202"/><w:doNotHyphenateCaps/><w:drawingGridHorizontalSpacing w:val="120"/><w:drawingGridVerticalSpacing w:val="120"/><w:displayHorizontalDrawingGridEvery w:val="0"/><w:displayVerticalDrawingGridEvery w:val="3"/><w:useMarginsForDrawingGridOrigin/><w:punctuationKerning/><w:characterSpacingControl w:val="CompressPunctuation"/><w:pixelsPerInch w:val="72"/><w:validateAgainstSchema/><w:saveInvalidXML w:val="off"/><w:ignoreMixedContent w:val="off"/><w:alwaysShowPlaceholderText w:val="off"/><w:compat><w:breakWrappedTables/><w:snapToGridInCell/><w:wrapTextWithPunct/><w:useAsianBreakRules/><w:dontGrowAutofit/></w:compat><wsp:rsids><wsp:rsidRoot wsp:val="001A13E6"/><wsp:rsid wsp:val="0015028E"/><wsp:rsid wsp:val="001A13E6"/><wsp:rsid wsp:val="002B73F3"/><wsp:rsid wsp:val="007F61BC"/><wsp:rsid wsp:val="009D197E"/><wsp:rsid wsp:val="00C2692F"/><wsp:rsid wsp:val="00D01553"/><wsp:rsid wsp:val="00DB5735"/><wsp:rsid wsp:val="00E2052D"/></wsp:rsids></w:docPr><w:body><wx:sect><w:p wsp:rsidR="002B73F3" wsp:rsidRDefault="002B73F3" wsp:rsidP="002B73F3"><m:oMathPara><m:oMath><m:r><w:rPr><w:rFonts w:ascii="Cambria Math" w:h-ansi="Cambria Math"/><wx:font wx:val="Cambria Math"/><w:i/></w:rPr><m:t>
+</m:t></m:r></m:oMath></m:oMathPara></w:p><w:sectPr wsp:rsidR="00000000"><w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" w:header="720" w:footer="720" w:gutter="0"/><w:cols w:space="720"/></w:sectPr></wx:sect></w:body></w:wordDocument>
+IDAT8O
+Gl_QZTX.t
+6V*m-
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<?mso-application progid="Word.Document"?>
+<w:wordDocument xmlns:aml="http://schemas.microsoft.com/aml/2001/core" xmlns:wpc="http://schemas.microsoft.com/office/word/2010/wordprocessingCanvas" xmlns:cx="http://schemas.microsoft.com/office/drawing/2014/chartex" xmlns:cx1="http://schemas.microsoft.com/office/drawing/2015/9/8/chartex" xmlns:cx2="http://schemas.microsoft.com/office/drawing/2015/10/21/chartex" xmlns:cx3="http://schemas.microsoft.com/office/drawing/2016/5/9/chartex" xmlns:cx4="http://schemas.microsoft.com/office/drawing/2016/5/10/chartex" xmlns:cx5="http://schemas.microsoft.com/office/drawing/2016/5/11/chartex" xmlns:cx6="http://schemas.microsoft.com/office/drawing/2016/5/12/chartex" xmlns:cx7="http://schemas.microsoft.com/office/drawing/2016/5/13/chartex" xmlns:cx8="http://schemas.microsoft.com/office/drawing/2016/5/14/chartex" xmlns:cr="http://schemas.microsoft.com/office/comments/2020/reactions" xmlns:dt="uuid:C2F41010-65B3-11d1-A29F-00AA00C14882" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:aink="http://schemas.microsoft.com/office/drawing/2016/ink" xmlns:am3d="http://schemas.microsoft.com/office/drawing/2017/model3d" xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:oel="http://schemas.microsoft.com/office/2019/extlst" xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:w10="urn:schemas-microsoft-com:office:word" xmlns:w="http://schemas.microsoft.com/office/word/2003/wordml" xmlns:w16cei="http://schemas.microsoft.com/office/word/2026/wordml/cei" xmlns:wx="http://schemas.microsoft.com/office/word/2003/auxHint" xmlns:wne="http://schemas.microsoft.com/office/word/2006/wordml" xmlns:wsp="http://schemas.microsoft.com/office/word/2003/wordml/sp2" xmlns:sl="http://schemas.microsoft.com/schemaLibrary/2003/core" w:macrosPresent="no" w:embeddedObjPresent="no" w:ocxPresent="no" xml:space="preserve"><w:ignoreSubtree w:val="http://schemas.microsoft.com/office/word/2003/wordml/sp2"/><o:DocumentProperties><o:Version>16</o:Version></o:DocumentProperties><w:docPr><w:view w:val="print"/><w:zoom w:val="best-fit" w:percent="193"/><w:doNotEmbedSystemFonts/><w:stylePaneFormatFilter w:val="3F01"/><w:defaultTabStop w:val="202"/><w:doNotHyphenateCaps/><w:drawingGridHorizontalSpacing w:val="120"/><w:drawingGridVerticalSpacing w:val="120"/><w:displayHorizontalDrawingGridEvery w:val="0"/><w:displayVerticalDrawingGridEvery w:val="3"/><w:useMarginsForDrawingGridOrigin/><w:punctuationKerning/><w:characterSpacingControl w:val="CompressPunctuation"/><w:pixelsPerInch w:val="72"/><w:validateAgainstSchema/><w:saveInvalidXML w:val="off"/><w:ignoreMixedContent w:val="off"/><w:alwaysShowPlaceholderText w:val="off"/><w:compat><w:breakWrappedTables/><w:snapToGridInCell/><w:wrapTextWithPunct/><w:useAsianBreakRules/><w:dontGrowAutofit/></w:compat><wsp:rsids><wsp:rsidRoot wsp:val="001A13E6"/><wsp:rsid wsp:val="0015028E"/><wsp:rsid wsp:val="001A13E6"/><wsp:rsid wsp:val="002B73F3"/><wsp:rsid wsp:val="007F61BC"/><wsp:rsid wsp:val="009D197E"/><wsp:rsid wsp:val="00C2692F"/><wsp:rsid wsp:val="00D01553"/><wsp:rsid wsp:val="00DB5735"/><wsp:rsid wsp:val="00E2052D"/></wsp:rsids></w:docPr><w:body><wx:sect><w:p wsp:rsidR="002B73F3" wsp:rsidRDefault="002B73F3" wsp:rsidP="002B73F3"><m:oMathPara><m:oMath><m:r><w:rPr><w:rFonts w:ascii="Cambria Math" w:h-ansi="Cambria Math"/><wx:font wx:val="Cambria Math"/><w:i/></w:rPr><m:t>
+</m:t></m:r></m:oMath></m:oMathPara></w:p><w:sectPr wsp:rsidR="00000000"><w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" w:header="720" w:footer="720" w:gutter="0"/><w:cols w:space="720"/></w:sectPr></wx:sect></w:body></w:wordDocument>
+IDAT8O
+Gl_QZTX.t
+6V*m-
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<?mso-application progid="Word.Document"?>
+<w:wordDocument xmlns:aml="http://schemas.microsoft.com/aml/2001/core" xmlns:wpc="http://schemas.microsoft.com/office/word/2010/wordprocessingCanvas" xmlns:cx="http://schemas.microsoft.com/office/drawing/2014/chartex" xmlns:cx1="http://schemas.microsoft.com/office/drawing/2015/9/8/chartex" xmlns:cx2="http://schemas.microsoft.com/office/drawing/2015/10/21/chartex" xmlns:cx3="http://schemas.microsoft.com/office/drawing/2016/5/9/chartex" xmlns:cx4="http://schemas.microsoft.com/office/drawing/2016/5/10/chartex" xmlns:cx5="http://schemas.microsoft.com/office/drawing/2016/5/11/chartex" xmlns:cx6="http://schemas.microsoft.com/office/drawing/2016/5/12/chartex" xmlns:cx7="http://schemas.microsoft.com/office/drawing/2016/5/13/chartex" xmlns:cx8="http://schemas.microsoft.com/office/drawing/2016/5/14/chartex" xmlns:cr="http://schemas.microsoft.com/office/comments/2020/reactions" xmlns:dt="uuid:C2F41010-65B3-11d1-A29F-00AA00C14882" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:aink="http://schemas.microsoft.com/office/drawing/2016/ink" xmlns:am3d="http://schemas.microsoft.com/office/drawing/2017/model3d" xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:oel="http://schemas.microsoft.com/office/2019/extlst" xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:w10="urn:schemas-microsoft-com:office:word" xmlns:w="http://schemas.microsoft.com/office/word/2003/wordml" xmlns:w16cei="http://schemas.microsoft.com/office/word/2026/wordml/cei" xmlns:wx="http://schemas.microsoft.com/office/word/2003/auxHint" xmlns:wne="http://schemas.microsoft.com/office/word/2006/wordml" xmlns:wsp="http://schemas.microsoft.com/office/word/2003/wordml/sp2" xmlns:sl="http://schemas.microsoft.com/schemaLibrary/2003/core" w:macrosPresent="no" w:embeddedObjPresent="no" w:ocxPresent="no" xml:space="preserve"><w:ignoreSubtree w:val="http://schemas.microsoft.com/office/word/2003/wordml/sp2"/><o:DocumentProperties><o:Version>16</o:Version></o:DocumentProperties><w:docPr><w:view w:val="print"/><w:zoom w:val="best-fit" w:percent="193"/><w:doNotEmbedSystemFonts/><w:stylePaneFormatFilter w:val="3F01"/><w:defaultTabStop w:val="202"/><w:doNotHyphenateCaps/><w:drawingGridHorizontalSpacing w:val="120"/><w:drawingGridVerticalSpacing w:val="120"/><w:displayHorizontalDrawingGridEvery w:val="0"/><w:displayVerticalDrawingGridEvery w:val="3"/><w:useMarginsForDrawingGridOrigin/><w:punctuationKerning/><w:characterSpacingControl w:val="CompressPunctuation"/><w:pixelsPerInch w:val="72"/><w:validateAgainstSchema/><w:saveInvalidXML w:val="off"/><w:ignoreMixedContent w:val="off"/><w:alwaysShowPlaceholderText w:val="off"/><w:compat><w:breakWrappedTables/><w:snapToGridInCell/><w:wrapTextWithPunct/><w:useAsianBreakRules/><w:dontGrowAutofit/></w:compat><wsp:rsids><wsp:rsidRoot wsp:val="001A13E6"/><wsp:rsid wsp:val="0015028E"/><wsp:rsid wsp:val="001A13E6"/><wsp:rsid wsp:val="007F61BC"/><wsp:rsid wsp:val="009D197E"/><wsp:rsid wsp:val="00C2692F"/><wsp:rsid wsp:val="00D01553"/><wsp:rsid wsp:val="00D35482"/><wsp:rsid wsp:val="00DB5735"/><wsp:rsid wsp:val="00E2052D"/></wsp:rsids></w:docPr><w:body><wx:sect><w:p wsp:rsidR="00D35482" wsp:rsidRDefault="00D35482" wsp:rsidP="00D35482"><m:oMathPara><m:oMath><m:r><w:rPr><w:rFonts w:ascii="Cambria Math" w:fareast="Cambria Math" w:h-ansi="Cambria Math" w:cs="Cambria Math"/><wx:font wx:val="Cambria Math"/><w:i/><w:sz w:val="24"/><w:sz-cs w:val="24"/></w:rPr><m:t>R</m:t></m:r><m:d><m:dPr><m:ctrlPr><w:rPr><w:rFonts w:ascii="Cambria Math" w:fareast="Cambria Math" w:h-ansi="Cambria Math" w:cs="Cambria Math"/><wx:font wx:val="Cambria Math"/><w:sz w:val="24"/><w:sz-cs w:val="24"/></w:rPr></m:ctrlPr></m:dPr><m:e><m:r><w:rPr><w:rFonts w:ascii="Cambria Math" w:fareast="Cambria Math" w:h-ansi="Cambria Math" w:cs="Cambria Math"/><wx:font wx:val="Cambria Math"/><w:i/><w:sz w:val="24"/><w:sz-cs w:val="24"/></w:rPr><m:t>c,
+</m:t></m:r></m:e></m:d></m:oMath></m:oMathPara></w:p><w:sectPr wsp:rsidR="00000000"><w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" w:header="720" w:footer="720" w:gutter="0"/><w:cols w:space="720"/></w:sectPr></wx:sect></w:body></w:wordDocument>
+IDATXG
+[lx&B
+NbL:{
+%V{d[
+tq>=,
+/W1z%6u
+D4=Io
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<?mso-application progid="Word.Document"?>
+<w:wordDocument xmlns:aml="http://schemas.microsoft.com/aml/2001/core" xmlns:wpc="http://schemas.microsoft.com/office/word/2010/wordprocessingCanvas" xmlns:cx="http://schemas.microsoft.com/office/drawing/2014/chartex" xmlns:cx1="http://schemas.microsoft.com/office/drawing/2015/9/8/chartex" xmlns:cx2="http://schemas.microsoft.com/office/drawing/2015/10/21/chartex" xmlns:cx3="http://schemas.microsoft.com/office/drawing/2016/5/9/chartex" xmlns:cx4="http://schemas.microsoft.com/office/drawing/2016/5/10/chartex" xmlns:cx5="http://schemas.microsoft.com/office/drawing/2016/5/11/chartex" xmlns:cx6="http://schemas.microsoft.com/office/drawing/2016/5/12/chartex" xmlns:cx7="http://schemas.microsoft.com/office/drawing/2016/5/13/chartex" xmlns:cx8="http://schemas.microsoft.com/office/drawing/2016/5/14/chartex" xmlns:cr="http://schemas.microsoft.com/office/comments/2020/reactions" xmlns:dt="uuid:C2F41010-65B3-11d1-A29F-00AA00C14882" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:aink="http://schemas.microsoft.com/office/drawing/2016/ink" xmlns:am3d="http://schemas.microsoft.com/office/drawing/2017/model3d" xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:oel="http://schemas.microsoft.com/office/2019/extlst" xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:w10="urn:schemas-microsoft-com:office:word" xmlns:w="http://schemas.microsoft.com/office/word/2003/wordml" xmlns:w16cei="http://schemas.microsoft.com/office/word/2026/wordml/cei" xmlns:wx="http://schemas.microsoft.com/office/word/2003/auxHint" xmlns:wne="http://schemas.microsoft.com/office/word/2006/wordml" xmlns:wsp="http://schemas.microsoft.com/office/word/2003/wordml/sp2" xmlns:sl="http://schemas.microsoft.com/schemaLibrary/2003/core" w:macrosPresent="no" w:embeddedObjPresent="no" w:ocxPresent="no" xml:space="preserve"><w:ignoreSubtree w:val="http://schemas.microsoft.com/office/word/2003/wordml/sp2"/><o:DocumentProperties><o:Version>16</o:Version></o:DocumentProperties><w:docPr><w:view w:val="print"/><w:zoom w:val="best-fit" w:percent="193"/><w:doNotEmbedSystemFonts/><w:stylePaneFormatFilter w:val="3F01"/><w:defaultTabStop w:val="202"/><w:doNotHyphenateCaps/><w:drawingGridHorizontalSpacing w:val="120"/><w:drawingGridVerticalSpacing w:val="120"/><w:displayHorizontalDrawingGridEvery w:val="0"/><w:displayVerticalDrawingGridEvery w:val="3"/><w:useMarginsForDrawingGridOrigin/><w:punctuationKerning/><w:characterSpacingControl w:val="CompressPunctuation"/><w:pixelsPerInch w:val="72"/><w:validateAgainstSchema/><w:saveInvalidXML w:val="off"/><w:ignoreMixedContent w:val="off"/><w:alwaysShowPlaceholderText w:val="off"/><w:compat><w:breakWrappedTables/><w:snapToGridInCell/><w:wrapTextWithPunct/><w:useAsianBreakRules/><w:dontGrowAutofit/></w:compat><wsp:rsids><wsp:rsidRoot wsp:val="001A13E6"/><wsp:rsid wsp:val="0015028E"/><wsp:rsid wsp:val="001A13E6"/><wsp:rsid wsp:val="007F61BC"/><wsp:rsid wsp:val="009D197E"/><wsp:rsid wsp:val="00C2692F"/><wsp:rsid wsp:val="00D01553"/><wsp:rsid wsp:val="00D35482"/><wsp:rsid wsp:val="00DB5735"/><wsp:rsid wsp:val="00E2052D"/></wsp:rsids></w:docPr><w:body><wx:sect><w:p wsp:rsidR="00D35482" wsp:rsidRDefault="00D35482" wsp:rsidP="00D35482"><m:oMathPara><m:oMath><m:r><w:rPr><w:rFonts w:ascii="Cambria Math" w:fareast="Cambria Math" w:h-ansi="Cambria Math" w:cs="Cambria Math"/><wx:font wx:val="Cambria Math"/><w:i/><w:sz w:val="24"/><w:sz-cs w:val="24"/></w:rPr><m:t>R</m:t></m:r><m:d><m:dPr><m:ctrlPr><w:rPr><w:rFonts w:ascii="Cambria Math" w:fareast="Cambria Math" w:h-ansi="Cambria Math" w:cs="Cambria Math"/><wx:font wx:val="Cambria Math"/><w:sz w:val="24"/><w:sz-cs w:val="24"/></w:rPr></m:ctrlPr></m:dPr><m:e><m:r><w:rPr><w:rFonts w:ascii="Cambria Math" w:fareast="Cambria Math" w:h-ansi="Cambria Math" w:cs="Cambria Math"/><wx:font wx:val="Cambria Math"/><w:i/><w:sz w:val="24"/><w:sz-cs w:val="24"/></w:rPr><m:t>c,
+</m:t></m:r></m:e></m:d></m:oMath></m:oMathPara></w:p><w:sectPr wsp:rsidR="00000000"><w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" w:header="720" w:footer="720" w:gutter="0"/><w:cols w:space="720"/></w:sectPr></wx:sect></w:body></w:wordDocument>
+IDATXG
+[lx&B
+NbL:{
+%V{d[
+tq>=,
+/W1z%6u
+D4=Io
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<?mso-application progid="Word.Document"?>
+<w:wordDocument xmlns:aml="http://schemas.microsoft.com/aml/2001/core" xmlns:wpc="http://schemas.microsoft.com/office/word/2010/wordprocessingCanvas" xmlns:cx="http://schemas.microsoft.com/office/drawing/2014/chartex" xmlns:cx1="http://schemas.microsoft.com/office/drawing/2015/9/8/chartex" xmlns:cx2="http://schemas.microsoft.com/office/drawing/2015/10/21/chartex" xmlns:cx3="http://schemas.microsoft.com/office/drawing/2016/5/9/chartex" xmlns:cx4="http://schemas.microsoft.com/office/drawing/2016/5/10/chartex" xmlns:cx5="http://schemas.microsoft.com/office/drawing/2016/5/11/chartex" xmlns:cx6="http://schemas.microsoft.com/office/drawing/2016/5/12/chartex" xmlns:cx7="http://schemas.microsoft.com/office/drawing/2016/5/13/chartex" xmlns:cx8="http://schemas.microsoft.com/office/drawing/2016/5/14/chartex" xmlns:cr="http://schemas.microsoft.com/office/comments/2020/reactions" xmlns:dt="uuid:C2F41010-65B3-11d1-A29F-00AA00C14882" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:aink="http://schemas.microsoft.com/office/drawing/2016/ink" xmlns:am3d="http://schemas.microsoft.com/office/drawing/2017/model3d" xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:oel="http://schemas.microsoft.com/office/2019/extlst" xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:w10="urn:schemas-microsoft-com:office:word" xmlns:w="http://schemas.microsoft.com/office/word/2003/wordml" xmlns:w16cei="http://schemas.microsoft.com/office/word/2026/wordml/cei" xmlns:wx="http://schemas.microsoft.com/office/word/2003/auxHint" xmlns:wne="http://schemas.microsoft.com/office/word/2006/wordml" xmlns:wsp="http://schemas.microsoft.com/office/word/2003/wordml/sp2" xmlns:sl="http://schemas.microsoft.com/schemaLibrary/2003/core" w:macrosPresent="no" w:embeddedObjPresent="no" w:ocxPresent="no" xml:space="preserve"><w:ignoreSubtree w:val="http://schemas.microsoft.com/office/word/2003/wordml/sp2"/><o:DocumentProperties><o:Version>16</o:Version></o:DocumentProperties><w:docPr><w:view w:val="print"/><w:zoom w:val="best-fit" w:percent="193"/><w:doNotEmbedSystemFonts/><w:stylePaneFormatFilter w:val="3F01"/><w:defaultTabStop w:val="202"/><w:doNotHyphenateCaps/><w:drawingGridHorizontalSpacing w:val="120"/><w:drawingGridVerticalSpacing w:val="120"/><w:displayHorizontalDrawingGridEvery w:val="0"/><w:displayVerticalDrawingGridEvery w:val="3"/><w:useMarginsForDrawingGridOrigin/><w:punctuationKerning/><w:characterSpacingControl w:val="CompressPunctuation"/><w:pixelsPerInch w:val="72"/><w:validateAgainstSchema/><w:saveInvalidXML w:val="off"/><w:ignoreMixedContent w:val="off"/><w:alwaysShowPlaceholderText w:val="off"/><w:compat><w:breakWrappedTables/><w:snapToGridInCell/><w:wrapTextWithPunct/><w:useAsianBreakRules/><w:dontGrowAutofit/></w:compat><wsp:rsids><wsp:rsidRoot wsp:val="001A13E6"/><wsp:rsid wsp:val="0015028E"/><wsp:rsid wsp:val="001A13E6"/><wsp:rsid wsp:val="002807AF"/><wsp:rsid wsp:val="007F61BC"/><wsp:rsid wsp:val="009D197E"/><wsp:rsid wsp:val="00C2692F"/><wsp:rsid wsp:val="00D01553"/><wsp:rsid wsp:val="00DB5735"/><wsp:rsid wsp:val="00E2052D"/></wsp:rsids></w:docPr><w:body><wx:sect><w:p wsp:rsidR="002807AF" wsp:rsidRDefault="002807AF" wsp:rsidP="002807AF"><m:oMathPara><m:oMath><m:r><w:rPr><w:rFonts w:ascii="Cambria Math" w:fareast="Cambria Math" w:h-ansi="Cambria Math" w:cs="Cambria Math"/><wx:font wx:val="Cambria Math"/><w:i/><w:sz w:val="24"/><w:sz-cs w:val="24"/></w:rPr><m:t>M
+</m:t></m:r><m:sSup><m:sSupPr><m:ctrlPr><w:rPr><w:rFonts w:ascii="Cambria Math" w:fareast="Cambria Math" w:h-ansi="Cambria Math" w:cs="Cambria Math"/><wx:font wx:val="Cambria Math"/><w:sz w:val="24"/><w:sz-cs w:val="24"/></w:rPr></m:ctrlPr></m:sSupPr><m:e><m:r><w:rPr><w:rFonts w:ascii="Cambria Math" w:fareast="Cambria Math" w:h-ansi="Cambria Math" w:cs="Cambria Math"/><wx:font wx:val="Cambria Math"/><w:i/><w:sz w:val="24"/><w:sz-cs w:val="24"/></w:rPr><m:t>R</m:t></m:r></m:e><m:sup><m:r><w:rPr><w:rFonts w:ascii="Cambria Math" w:fareast="Cambria Math" w:h-ansi="Cambria Math" w:cs="Cambria Math"/><wx:font wx:val="Cambria Math"/><w:i/><w:sz w:val="24"/><w:sz-cs w:val="24"/></w:rPr><m:t>L
+</m:t></m:r><m:sSub><m:sSubPr><m:ctrlPr><w:rPr><w:rFonts w:ascii="Cambria Math" w:fareast="Cambria Math" w:h-ansi="Cambria Math" w:cs="Cambria Math"/><wx:font wx:val="Cambria Math"/><w:sz w:val="24"/><w:sz-cs w:val="24"/></w:rPr></m:ctrlPr></m:sSubPr><m:e><m:r><w:rPr><w:rFonts w:ascii="Cambria Math" w:fareast="Cambria Math" w:h-ansi="Cambria Math" w:cs="Cambria Math"/><wx:font wx:val="Cambria Math"/><w:i/><w:sz w:val="24"/><w:sz-cs w:val="24"/></w:rPr><m:t>R</m:t></m:r></m:e><m:sub><m:r><w:rPr><w:rFonts w:ascii="Cambria Math" w:fareast="Cambria Math" w:h-ansi="Cambria Math" w:cs="Cambria Math"/><wx:font wx:val="Cambria Math"/><w:i/><w:sz w:val="24"/><w:sz-cs w:val="24"/></w:rPr><m:t>max</m:t></m:r></m:sub></m:sSub></m:sup></m:sSup></m:oMath></m:oMathPara></w:p><w:sectPr wsp:rsidR="00000000"><w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" w:header="720" w:footer="720" w:gutter="0"/><w:cols w:space="720"/></w:sectPr></wx:sect></w:body></w:wordDocument>
+*IDAThC
+e3m1O
+=YOx"
+d$p4P
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<?mso-application progid="Word.Document"?>
+<w:wordDocument xmlns:aml="http://schemas.microsoft.com/aml/2001/core" xmlns:wpc="http://schemas.microsoft.com/office/word/2010/wordprocessingCanvas" xmlns:cx="http://schemas.microsoft.com/office/drawing/2014/chartex" xmlns:cx1="http://schemas.microsoft.com/office/drawing/2015/9/8/chartex" xmlns:cx2="http://schemas.microsoft.com/office/drawing/2015/10/21/chartex" xmlns:cx3="http://schemas.microsoft.com/office/drawing/2016/5/9/chartex" xmlns:cx4="http://schemas.microsoft.com/office/drawing/2016/5/10/chartex" xmlns:cx5="http://schemas.microsoft.com/office/drawing/2016/5/11/chartex" xmlns:cx6="http://schemas.microsoft.com/office/drawing/2016/5/12/chartex" xmlns:cx7="http://schemas.microsoft.com/office/drawing/2016/5/13/chartex" xmlns:cx8="http://schemas.microsoft.com/office/drawing/2016/5/14/chartex" xmlns:cr="http://schemas.microsoft.com/office/comments/2020/reactions" xmlns:dt="uuid:C2F41010-65B3-11d1-A29F-00AA00C14882" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:aink="http://schemas.microsoft.com/office/drawing/2016/ink" xmlns:am3d="http://schemas.microsoft.com/office/drawing/2017/model3d" xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:oel="http://schemas.microsoft.com/office/2019/extlst" xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:w10="urn:schemas-microsoft-com:office:word" xmlns:w="http://schemas.microsoft.com/office/word/2003/wordml" xmlns:w16cei="http://schemas.microsoft.com/office/word/2026/wordml/cei" xmlns:wx="http://schemas.microsoft.com/office/word/2003/auxHint" xmlns:wne="http://schemas.microsoft.com/office/word/2006/wordml" xmlns:wsp="http://schemas.microsoft.com/office/word/2003/wordml/sp2" xmlns:sl="http://schemas.microsoft.com/schemaLibrary/2003/core" w:macrosPresent="no" w:embeddedObjPresent="no" w:ocxPresent="no" xml:space="preserve"><w:ignoreSubtree w:val="http://schemas.microsoft.com/office/word/2003/wordml/sp2"/><o:DocumentProperties><o:Version>16</o:Version></o:DocumentProperties><w:docPr><w:view w:val="print"/><w:zoom w:val="best-fit" w:percent="193"/><w:doNotEmbedSystemFonts/><w:stylePaneFormatFilter w:val="3F01"/><w:defaultTabStop w:val="202"/><w:doNotHyphenateCaps/><w:drawingGridHorizontalSpacing w:val="120"/><w:drawingGridVerticalSpacing w:val="120"/><w:displayHorizontalDrawingGridEvery w:val="0"/><w:displayVerticalDrawingGridEvery w:val="3"/><w:useMarginsForDrawingGridOrigin/><w:punctuationKerning/><w:characterSpacingControl w:val="CompressPunctuation"/><w:pixelsPerInch w:val="72"/><w:validateAgainstSchema/><w:saveInvalidXML w:val="off"/><w:ignoreMixedContent w:val="off"/><w:alwaysShowPlaceholderText w:val="off"/><w:compat><w:breakWrappedTables/><w:snapToGridInCell/><w:wrapTextWithPunct/><w:useAsianBreakRules/><w:dontGrowAutofit/></w:compat><wsp:rsids><wsp:rsidRoot wsp:val="001A13E6"/><wsp:rsid wsp:val="0015028E"/><wsp:rsid wsp:val="001A13E6"/><wsp:rsid wsp:val="002807AF"/><wsp:rsid wsp:val="007F61BC"/><wsp:rsid wsp:val="009D197E"/><wsp:rsid wsp:val="00C2692F"/><wsp:rsid wsp:val="00D01553"/><wsp:rsid wsp:val="00DB5735"/><wsp:rsid wsp:val="00E2052D"/></wsp:rsids></w:docPr><w:body><wx:sect><w:p wsp:rsidR="002807AF" wsp:rsidRDefault="002807AF" wsp:rsidP="002807AF"><m:oMathPara><m:oMath><m:r><w:rPr><w:rFonts w:ascii="Cambria Math" w:fareast="Cambria Math" w:h-ansi="Cambria Math" w:cs="Cambria Math"/><wx:font wx:val="Cambria Math"/><w:i/><w:sz w:val="24"/><w:sz-cs w:val="24"/></w:rPr><m:t>M
+</m:t></m:r><m:sSup><m:sSupPr><m:ctrlPr><w:rPr><w:rFonts w:ascii="Cambria Math" w:fareast="Cambria Math" w:h-ansi="Cambria Math" w:cs="Cambria Math"/><wx:font wx:val="Cambria Math"/><w:sz w:val="24"/><w:sz-cs w:val="24"/></w:rPr></m:ctrlPr></m:sSupPr><m:e><m:r><w:rPr><w:rFonts w:ascii="Cambria Math" w:fareast="Cambria Math" w:h-ansi="Cambria Math" w:cs="Cambria Math"/><wx:font wx:val="Cambria Math"/><w:i/><w:sz w:val="24"/><w:sz-cs w:val="24"/></w:rPr><m:t>R</m:t></m:r></m:e><m:sup><m:r><w:rPr><w:rFonts w:ascii="Cambria Math" w:fareast="Cambria Math" w:h-ansi="Cambria Math" w:cs="Cambria Math"/><wx:font wx:val="Cambria Math"/><w:i/><w:sz w:val="24"/><w:sz-cs w:val="24"/></w:rPr><m:t>L
+</m:t></m:r><m:sSub><m:sSubPr><m:ctrlPr><w:rPr><w:rFonts w:ascii="Cambria Math" w:fareast="Cambria Math" w:h-ansi="Cambria Math" w:cs="Cambria Math"/><wx:font wx:val="Cambria Math"/><w:sz w:val="24"/><w:sz-cs w:val="24"/></w:rPr></m:ctrlPr></m:sSubPr><m:e><m:r><w:rPr><w:rFonts w:ascii="Cambria Math" w:fareast="Cambria Math" w:h-ansi="Cambria Math" w:cs="Cambria Math"/><wx:font wx:val="Cambria Math"/><w:i/><w:sz w:val="24"/><w:sz-cs w:val="24"/></w:rPr><m:t>R</m:t></m:r></m:e><m:sub><m:r><w:rPr><w:rFonts w:ascii="Cambria Math" w:fareast="Cambria Math" w:h-ansi="Cambria Math" w:cs="Cambria Math"/><wx:font wx:val="Cambria Math"/><w:i/><w:sz w:val="24"/><w:sz-cs w:val="24"/></w:rPr><m:t>max</m:t></m:r></m:sub></m:sSub></m:sup></m:sSup></m:oMath></m:oMathPara></w:p><w:sectPr wsp:rsidR="00000000"><w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" w:header="720" w:footer="720" w:gutter="0"/><w:cols w:space="720"/></w:sectPr></wx:sect></w:body></w:wordDocument>
+*IDAThC
+e3m1O
+=YOx"
+d$p4P
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<?mso-application progid="Word.Document"?>
+<w:wordDocument xmlns:aml="http://schemas.microsoft.com/aml/2001/core" xmlns:wpc="http://schemas.microsoft.com/office/word/2010/wordprocessingCanvas" xmlns:cx="http://schemas.microsoft.com/office/drawing/2014/chartex" xmlns:cx1="http://schemas.microsoft.com/office/drawing/2015/9/8/chartex" xmlns:cx2="http://schemas.microsoft.com/office/drawing/2015/10/21/chartex" xmlns:cx3="http://schemas.microsoft.com/office/drawing/2016/5/9/chartex" xmlns:cx4="http://schemas.microsoft.com/office/drawing/2016/5/10/chartex" xmlns:cx5="http://schemas.microsoft.com/office/drawing/2016/5/11/chartex" xmlns:cx6="http://schemas.microsoft.com/office/drawing/2016/5/12/chartex" xmlns:cx7="http://schemas.microsoft.com/office/drawing/2016/5/13/chartex" xmlns:cx8="http://schemas.microsoft.com/office/drawing/2016/5/14/chartex" xmlns:cr="http://schemas.microsoft.com/office/comments/2020/reactions" xmlns:dt="uuid:C2F41010-65B3-11d1-A29F-00AA00C14882" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:aink="http://schemas.microsoft.com/office/drawing/2016/ink" xmlns:am3d="http://schemas.microsoft.com/office/drawing/2017/model3d" xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:oel="http://schemas.microsoft.com/office/2019/extlst" xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:w10="urn:schemas-microsoft-com:office:word" xmlns:w="http://schemas.microsoft.com/office/word/2003/wordml" xmlns:w16cei="http://schemas.microsoft.com/office/word/2026/wordml/cei" xmlns:wx="http://schemas.microsoft.com/office/word/2003/auxHint" xmlns:wne="http://schemas.microsoft.com/office/word/2006/wordml" xmlns:wsp="http://schemas.microsoft.com/office/word/2003/wordml/sp2" xmlns:sl="http://schemas.microsoft.com/schemaLibrary/2003/core" w:macrosPresent="no" w:embeddedObjPresent="no" w:ocxPresent="no" xml:space="preserve"><w:ignoreSubtree w:val="http://schemas.microsoft.com/office/word/2003/wordml/sp2"/><o:DocumentProperties><o:Version>16</o:Version></o:DocumentProperties><w:docPr><w:view w:val="print"/><w:zoom w:val="best-fit" w:percent="193"/><w:doNotEmbedSystemFonts/><w:stylePaneFormatFilter w:val="3F01"/><w:defaultTabStop w:val="202"/><w:doNotHyphenateCaps/><w:drawingGridHorizontalSpacing w:val="120"/><w:drawingGridVerticalSpacing w:val="120"/><w:displayHorizontalDrawingGridEvery w:val="0"/><w:displayVerticalDrawingGridEvery w:val="3"/><w:useMarginsForDrawingGridOrigin/><w:punctuationKerning/><w:characterSpacingControl w:val="CompressPunctuation"/><w:pixelsPerInch w:val="72"/><w:validateAgainstSchema/><w:saveInvalidXML w:val="off"/><w:ignoreMixedContent w:val="off"/><w:alwaysShowPlaceholderText w:val="off"/><w:compat><w:breakWrappedTables/><w:snapToGridInCell/><w:wrapTextWithPunct/><w:useAsianBreakRules/><w:dontGrowAutofit/></w:compat><wsp:rsids><wsp:rsidRoot wsp:val="001A13E6"/><wsp:rsid wsp:val="0015028E"/><wsp:rsid wsp:val="001A13E6"/><wsp:rsid wsp:val="007F61BC"/><wsp:rsid wsp:val="009D197E"/><wsp:rsid wsp:val="00C2692F"/><wsp:rsid wsp:val="00D01553"/><wsp:rsid wsp:val="00D6613E"/><wsp:rsid wsp:val="00DB5735"/><wsp:rsid wsp:val="00E2052D"/></wsp:rsids></w:docPr><w:body><wx:sect><w:p wsp:rsidR="00D6613E" wsp:rsidRDefault="00D6613E" wsp:rsidP="00D6613E"><m:oMathPara><m:oMath><m:r><w:rPr><w:rFonts w:ascii="Cambria Math" w:fareast="Cambria Math" w:h-ansi="Cambria Math" w:cs="Cambria Math"/><wx:font wx:val="Cambria Math"/><w:i/><w:sz w:val="24"/><w:sz-cs w:val="24"/></w:rPr><m:t>L</m:t></m:r></m:oMath></m:oMathPara></w:p><w:sectPr wsp:rsidR="00000000"><w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" w:header="720" w:footer="720" w:gutter="0"/><w:cols w:space="720"/></w:sectPr></wx:sect></w:body></w:wordDocument>
+IDAT8Oc
+V$uxmE
+iH<B"6m
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<?mso-application progid="Word.Document"?>
+<w:wordDocument xmlns:aml="http://schemas.microsoft.com/aml/2001/core" xmlns:wpc="http://schemas.microsoft.com/office/word/2010/wordprocessingCanvas" xmlns:cx="http://schemas.microsoft.com/office/drawing/2014/chartex" xmlns:cx1="http://schemas.microsoft.com/office/drawing/2015/9/8/chartex" xmlns:cx2="http://schemas.microsoft.com/office/drawing/2015/10/21/chartex" xmlns:cx3="http://schemas.microsoft.com/office/drawing/2016/5/9/chartex" xmlns:cx4="http://schemas.microsoft.com/office/drawing/2016/5/10/chartex" xmlns:cx5="http://schemas.microsoft.com/office/drawing/2016/5/11/chartex" xmlns:cx6="http://schemas.microsoft.com/office/drawing/2016/5/12/chartex" xmlns:cx7="http://schemas.microsoft.com/office/drawing/2016/5/13/chartex" xmlns:cx8="http://schemas.microsoft.com/office/drawing/2016/5/14/chartex" xmlns:cr="http://schemas.microsoft.com/office/comments/2020/reactions" xmlns:dt="uuid:C2F41010-65B3-11d1-A29F-00AA00C14882" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:aink="http://schemas.microsoft.com/office/drawing/2016/ink" xmlns:am3d="http://schemas.microsoft.com/office/drawing/2017/model3d" xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:oel="http://schemas.microsoft.com/office/2019/extlst" xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:w10="urn:schemas-microsoft-com:office:word" xmlns:w="http://schemas.microsoft.com/office/word/2003/wordml" xmlns:w16cei="http://schemas.microsoft.com/office/word/2026/wordml/cei" xmlns:wx="http://schemas.microsoft.com/office/word/2003/auxHint" xmlns:wne="http://schemas.microsoft.com/office/word/2006/wordml" xmlns:wsp="http://schemas.microsoft.com/office/word/2003/wordml/sp2" xmlns:sl="http://schemas.microsoft.com/schemaLibrary/2003/core" w:macrosPresent="no" w:embeddedObjPresent="no" w:ocxPresent="no" xml:space="preserve"><w:ignoreSubtree w:val="http://schemas.microsoft.com/office/word/2003/wordml/sp2"/><o:DocumentProperties><o:Version>16</o:Version></o:DocumentProperties><w:docPr><w:view w:val="print"/><w:zoom w:val="best-fit" w:percent="193"/><w:doNotEmbedSystemFonts/><w:stylePaneFormatFilter w:val="3F01"/><w:defaultTabStop w:val="202"/><w:doNotHyphenateCaps/><w:drawingGridHorizontalSpacing w:val="120"/><w:drawingGridVerticalSpacing w:val="120"/><w:displayHorizontalDrawingGridEvery w:val="0"/><w:displayVerticalDrawingGridEvery w:val="3"/><w:useMarginsForDrawingGridOrigin/><w:punctuationKerning/><w:characterSpacingControl w:val="CompressPunctuation"/><w:pixelsPerInch w:val="72"/><w:validateAgainstSchema/><w:saveInvalidXML w:val="off"/><w:ignoreMixedContent w:val="off"/><w:alwaysShowPlaceholderText w:val="off"/><w:compat><w:breakWrappedTables/><w:snapToGridInCell/><w:wrapTextWithPunct/><w:useAsianBreakRules/><w:dontGrowAutofit/></w:compat><wsp:rsids><wsp:rsidRoot wsp:val="001A13E6"/><wsp:rsid wsp:val="0015028E"/><wsp:rsid wsp:val="001A13E6"/><wsp:rsid wsp:val="007F61BC"/><wsp:rsid wsp:val="009D197E"/><wsp:rsid wsp:val="00C2692F"/><wsp:rsid wsp:val="00D01553"/><wsp:rsid wsp:val="00D6613E"/><wsp:rsid wsp:val="00DB5735"/><wsp:rsid wsp:val="00E2052D"/></wsp:rsids></w:docPr><w:body><wx:sect><w:p wsp:rsidR="00D6613E" wsp:rsidRDefault="00D6613E" wsp:rsidP="00D6613E"><m:oMathPara><m:oMath><m:r><w:rPr><w:rFonts w:ascii="Cambria Math" w:fareast="Cambria Math" w:h-ansi="Cambria Math" w:cs="Cambria Math"/><wx:font wx:val="Cambria Math"/><w:i/><w:sz w:val="24"/><w:sz-cs w:val="24"/></w:rPr><m:t>L</m:t></m:r></m:oMath></m:oMathPara></w:p><w:sectPr wsp:rsidR="00000000"><w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" w:header="720" w:footer="720" w:gutter="0"/><w:cols w:space="720"/></w:sectPr></wx:sect></w:body></w:wordDocument>
+IDAT8Oc
+V$uxmE
+iH<B"6m
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<?mso-application progid="Word.Document"?>
+<w:wordDocument xmlns:aml="http://schemas.microsoft.com/aml/2001/core" xmlns:wpc="http://schemas.microsoft.com/office/word/2010/wordprocessingCanvas" xmlns:cx="http://schemas.microsoft.com/office/drawing/2014/chartex" xmlns:cx1="http://schemas.microsoft.com/office/drawing/2015/9/8/chartex" xmlns:cx2="http://schemas.microsoft.com/office/drawing/2015/10/21/chartex" xmlns:cx3="http://schemas.microsoft.com/office/drawing/2016/5/9/chartex" xmlns:cx4="http://schemas.microsoft.com/office/drawing/2016/5/10/chartex" xmlns:cx5="http://schemas.microsoft.com/office/drawing/2016/5/11/chartex" xmlns:cx6="http://schemas.microsoft.com/office/drawing/2016/5/12/chartex" xmlns:cx7="http://schemas.microsoft.com/office/drawing/2016/5/13/chartex" xmlns:cx8="http://schemas.microsoft.com/office/drawing/2016/5/14/chartex" xmlns:cr="http://schemas.microsoft.com/office/comments/2020/reactions" xmlns:dt="uuid:C2F41010-65B3-11d1-A29F-00AA00C14882" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:aink="http://schemas.microsoft.com/office/drawing/2016/ink" xmlns:am3d="http://schemas.microsoft.com/office/drawing/2017/model3d" xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:oel="http://schemas.microsoft.com/office/2019/extlst" xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:w10="urn:schemas-microsoft-com:office:word" xmlns:w="http://schemas.microsoft.com/office/word/2003/wordml" xmlns:w16cei="http://schemas.microsoft.com/office/word/2026/wordml/cei" xmlns:wx="http://schemas.microsoft.com/office/word/2003/auxHint" xmlns:wne="http://schemas.microsoft.com/office/word/2006/wordml" xmlns:wsp="http://schemas.microsoft.com/office/word/2003/wordml/sp2" xmlns:sl="http://schemas.microsoft.com/schemaLibrary/2003/core" w:macrosPresent="no" w:embeddedObjPresent="no" w:ocxPresent="no" xml:space="preserve"><w:ignoreSubtree w:val="http://schemas.microsoft.com/office/word/2003/wordml/sp2"/><o:DocumentProperties><o:Version>16</o:Version></o:DocumentProperties><w:docPr><w:view w:val="print"/><w:zoom w:val="best-fit" w:percent="193"/><w:doNotEmbedSystemFonts/><w:stylePaneFormatFilter w:val="3F01"/><w:defaultTabStop w:val="202"/><w:doNotHyphenateCaps/><w:drawingGridHorizontalSpacing w:val="120"/><w:drawingGridVerticalSpacing w:val="120"/><w:displayHorizontalDrawingGridEvery w:val="0"/><w:displayVerticalDrawingGridEvery w:val="3"/><w:useMarginsForDrawingGridOrigin/><w:punctuationKerning/><w:characterSpacingControl w:val="CompressPunctuation"/><w:pixelsPerInch w:val="72"/><w:validateAgainstSchema/><w:saveInvalidXML w:val="off"/><w:ignoreMixedContent w:val="off"/><w:alwaysShowPlaceholderText w:val="off"/><w:compat><w:breakWrappedTables/><w:snapToGridInCell/><w:wrapTextWithPunct/><w:useAsianBreakRules/><w:dontGrowAutofit/></w:compat><wsp:rsids><wsp:rsidRoot wsp:val="001A13E6"/><wsp:rsid wsp:val="0015028E"/><wsp:rsid wsp:val="001A13E6"/><wsp:rsid wsp:val="007F61BC"/><wsp:rsid wsp:val="009D197E"/><wsp:rsid wsp:val="00C2692F"/><wsp:rsid wsp:val="00C40245"/><wsp:rsid wsp:val="00D01553"/><wsp:rsid wsp:val="00DB5735"/><wsp:rsid wsp:val="00E2052D"/></wsp:rsids></w:docPr><w:body><wx:sect><w:p wsp:rsidR="00C40245" wsp:rsidRDefault="00C40245" wsp:rsidP="00C40245"><m:oMathPara><m:oMath><m:sSub><m:sSubPr><m:ctrlPr><w:rPr><w:rFonts w:ascii="Cambria Math" w:fareast="Cambria Math" w:h-ansi="Cambria Math" w:cs="Cambria Math"/><wx:font wx:val="Cambria Math"/><w:sz w:val="24"/><w:sz-cs w:val="24"/></w:rPr></m:ctrlPr></m:sSubPr><m:e><m:r><w:rPr><w:rFonts w:ascii="Cambria Math" w:fareast="Cambria Math" w:h-ansi="Cambria Math" w:cs="Cambria Math"/><wx:font wx:val="Cambria Math"/><w:i/><w:sz w:val="24"/><w:sz-cs w:val="24"/></w:rPr><m:t>L</m:t></m:r></m:e><m:sub><m:r><w:rPr><w:rFonts w:ascii="Cambria Math" w:fareast="Cambria Math" w:h-ansi="Cambria Math" w:cs="Cambria Math"/><wx:font wx:val="Cambria Math"/><w:i/><w:sz w:val="24"/><w:sz-cs w:val="24"/></w:rPr><m:t>budget</m:t></m:r></m:sub></m:sSub><m:r><w:rPr><w:rFonts w:ascii="Cambria Math" w:fareast="Cambria Math" w:h-ansi="Cambria Math" w:cs="Cambria Math"/><wx:font wx:val="Cambria Math"/><w:i/><w:sz w:val="24"/><w:sz-cs w:val="24"/></w:rPr><m:t>=
+</m:t></m:r><m:sSup><m:sSupPr><m:ctrlPr><w:rPr><w:rFonts w:ascii="Cambria Math" w:fareast="Cambria Math" w:h-ansi="Cambria Math" w:cs="Cambria Math"/><wx:font wx:val="Cambria Math"/><w:sz w:val="24"/><w:sz-cs w:val="24"/></w:rPr></m:ctrlPr></m:sSupPr><m:e><m:d><m:dPr><m:ctrlPr><w:rPr><w:rFonts w:ascii="Cambria Math" w:fareast="Cambria Math" w:h-ansi="Cambria Math" w:cs="Cambria Math"/><wx:font wx:val="Cambria Math"/><w:sz w:val="24"/><w:sz-cs w:val="24"/></w:rPr></m:ctrlPr></m:dPr><m:e><m:bar><m:barPr><m:ctrlPr><w:rPr><w:rFonts w:ascii="Cambria Math" w:fareast="Cambria Math" w:h-ansi="Cambria Math" w:cs="Cambria Math"/><wx:font wx:val="Cambria Math"/><w:sz w:val="24"/><w:sz-cs w:val="24"/></w:rPr></m:ctrlPr></m:barPr><m:e><m:r><w:rPr><w:rFonts w:ascii="Cambria Math" w:fareast="Cambria Math" w:h-ansi="Cambria Math" w:cs="Cambria Math"/><wx:font wx:val="Cambria Math"/><w:i/><w:sz w:val="24"/><w:sz-cs w:val="24"/></w:rPr><m:t>r</m:t></m:r></m:e></m:bar><m:r><w:rPr><w:rFonts w:ascii="Cambria Math" w:fareast="Cambria Math" w:h-ansi="Cambria Math" w:cs="Cambria Math"/><wx:font wx:val="Cambria Math"/><w:i/><w:sz w:val="24"/><w:sz-cs w:val="24"/></w:rPr><m:t>-C</m:t></m:r></m:e></m:d></m:e><m:sup><m:r><w:rPr><w:rFonts w:ascii="Cambria Math" w:fareast="Cambria Math" w:h-ansi="Cambria Math" w:cs="Cambria Math"/><wx:font wx:val="Cambria Math"/><w:i/><w:sz w:val="24"/><w:sz-cs w:val="24"/></w:rPr><m:t>2</m:t></m:r></m:sup></m:sSup></m:oMath></m:oMathPara></w:p><w:sectPr wsp:rsidR="00000000"><w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" w:header="720" w:footer="720" w:gutter="0"/><w:cols w:space="720"/></w:sectPr></wx:sect></w:body></w:wordDocument>
+hIDATx^
+whdJVfU'
+UfkQh
+c=ptf
+b7wf;
+BcgNVBco]*
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<?mso-application progid="Word.Document"?>
+<w:wordDocument xmlns:aml="http://schemas.microsoft.com/aml/2001/core" xmlns:wpc="http://schemas.microsoft.com/office/word/2010/wordprocessingCanvas" xmlns:cx="http://schemas.microsoft.com/office/drawing/2014/chartex" xmlns:cx1="http://schemas.microsoft.com/office/drawing/2015/9/8/chartex" xmlns:cx2="http://schemas.microsoft.com/office/drawing/2015/10/21/chartex" xmlns:cx3="http://schemas.microsoft.com/office/drawing/2016/5/9/chartex" xmlns:cx4="http://schemas.microsoft.com/office/drawing/2016/5/10/chartex" xmlns:cx5="http://schemas.microsoft.com/office/drawing/2016/5/11/chartex" xmlns:cx6="http://schemas.microsoft.com/office/drawing/2016/5/12/chartex" xmlns:cx7="http://schemas.microsoft.com/office/drawing/2016/5/13/chartex" xmlns:cx8="http://schemas.microsoft.com/office/drawing/2016/5/14/chartex" xmlns:cr="http://schemas.microsoft.com/office/comments/2020/reactions" xmlns:dt="uuid:C2F41010-65B3-11d1-A29F-00AA00C14882" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:aink="http://schemas.microsoft.com/office/drawing/2016/ink" xmlns:am3d="http://schemas.microsoft.com/office/drawing/2017/model3d" xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:oel="http://schemas.microsoft.com/office/2019/extlst" xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:w10="urn:schemas-microsoft-com:office:word" xmlns:w="http://schemas.microsoft.com/office/word/2003/wordml" xmlns:w16cei="http://schemas.microsoft.com/office/word/2026/wordml/cei" xmlns:wx="http://schemas.microsoft.com/office/word/2003/auxHint" xmlns:wne="http://schemas.microsoft.com/office/word/2006/wordml" xmlns:wsp="http://schemas.microsoft.com/office/word/2003/wordml/sp2" xmlns:sl="http://schemas.microsoft.com/schemaLibrary/2003/core" w:macrosPresent="no" w:embeddedObjPresent="no" w:ocxPresent="no" xml:space="preserve"><w:ignoreSubtree w:val="http://schemas.microsoft.com/office/word/2003/wordml/sp2"/><o:DocumentProperties><o:Version>16</o:Version></o:DocumentProperties><w:docPr><w:view w:val="print"/><w:zoom w:val="best-fit" w:percent="193"/><w:doNotEmbedSystemFonts/><w:stylePaneFormatFilter w:val="3F01"/><w:defaultTabStop w:val="202"/><w:doNotHyphenateCaps/><w:drawingGridHorizontalSpacing w:val="120"/><w:drawingGridVerticalSpacing w:val="120"/><w:displayHorizontalDrawingGridEvery w:val="0"/><w:displayVerticalDrawingGridEvery w:val="3"/><w:useMarginsForDrawingGridOrigin/><w:punctuationKerning/><w:characterSpacingControl w:val="CompressPunctuation"/><w:pixelsPerInch w:val="72"/><w:validateAgainstSchema/><w:saveInvalidXML w:val="off"/><w:ignoreMixedContent w:val="off"/><w:alwaysShowPlaceholderText w:val="off"/><w:compat><w:breakWrappedTables/><w:snapToGridInCell/><w:wrapTextWithPunct/><w:useAsianBreakRules/><w:dontGrowAutofit/></w:compat><wsp:rsids><wsp:rsidRoot wsp:val="001A13E6"/><wsp:rsid wsp:val="0015028E"/><wsp:rsid wsp:val="001A13E6"/><wsp:rsid wsp:val="007F61BC"/><wsp:rsid wsp:val="009D197E"/><wsp:rsid wsp:val="00C2692F"/><wsp:rsid wsp:val="00C40245"/><wsp:rsid wsp:val="00D01553"/><wsp:rsid wsp:val="00DB5735"/><wsp:rsid wsp:val="00E2052D"/></wsp:rsids></w:docPr><w:body><wx:sect><w:p wsp:rsidR="00C40245" wsp:rsidRDefault="00C40245" wsp:rsidP="00C40245"><m:oMathPara><m:oMath><m:sSub><m:sSubPr><m:ctrlPr><w:rPr><w:rFonts w:ascii="Cambria Math" w:fareast="Cambria Math" w:h-ansi="Cambria Math" w:cs="Cambria Math"/><wx:font wx:val="Cambria Math"/><w:sz w:val="24"/><w:sz-cs w:val="24"/></w:rPr></m:ctrlPr></m:sSubPr><m:e><m:r><w:rPr><w:rFonts w:ascii="Cambria Math" w:fareast="Cambria Math" w:h-ansi="Cambria Math" w:cs="Cambria Math"/><wx:font wx:val="Cambria Math"/><w:i/><w:sz w:val="24"/><w:sz-cs w:val="24"/></w:rPr><m:t>L</m:t></m:r></m:e><m:sub><m:r><w:rPr><w:rFonts w:ascii="Cambria Math" w:fareast="Cambria Math" w:h-ansi="Cambria Math" w:cs="Cambria Math"/><wx:font wx:val="Cambria Math"/><w:i/><w:sz w:val="24"/><w:sz-cs w:val="24"/></w:rPr><m:t>budget</m:t></m:r></m:sub></m:sSub><m:r><w:rPr><w:rFonts w:ascii="Cambria Math" w:fareast="Cambria Math" w:h-ansi="Cambria Math" w:cs="Cambria Math"/><wx:font wx:val="Cambria Math"/><w:i/><w:sz w:val="24"/><w:sz-cs w:val="24"/></w:rPr><m:t>=
+</m:t></m:r><m:sSup><m:sSupPr><m:ctrlPr><w:rPr><w:rFonts w:ascii="Cambria Math" w:fareast="Cambria Math" w:h-ansi="Cambria Math" w:cs="Cambria Math"/><wx:font wx:val="Cambria Math"/><w:sz w:val="24"/><w:sz-cs w:val="24"/></w:rPr></m:ctrlPr></m:sSupPr><m:e><m:d><m:dPr><m:ctrlPr><w:rPr><w:rFonts w:ascii="Cambria Math" w:fareast="Cambria Math" w:h-ansi="Cambria Math" w:cs="Cambria Math"/><wx:font wx:val="Cambria Math"/><w:sz w:val="24"/><w:sz-cs w:val="24"/></w:rPr></m:ctrlPr></m:dPr><m:e><m:bar><m:barPr><m:ctrlPr><w:rPr><w:rFonts w:ascii="Cambria Math" w:fareast="Cambria Math" w:h-ansi="Cambria Math" w:cs="Cambria Math"/><wx:font wx:val="Cambria Math"/><w:sz w:val="24"/><w:sz-cs w:val="24"/></w:rPr></m:ctrlPr></m:barPr><m:e><m:r><w:rPr><w:rFonts w:ascii="Cambria Math" w:fareast="Cambria Math" w:h-ansi="Cambria Math" w:cs="Cambria Math"/><wx:font wx:val="Cambria Math"/><w:i/><w:sz w:val="24"/><w:sz-cs w:val="24"/></w:rPr><m:t>r</m:t></m:r></m:e></m:bar><m:r><w:rPr><w:rFonts w:ascii="Cambria Math" w:fareast="Cambria Math" w:h-ansi="Cambria Math" w:cs="Cambria Math"/><wx:font wx:val="Cambria Math"/><w:i/><w:sz w:val="24"/><w:sz-cs w:val="24"/></w:rPr><m:t>-C</m:t></m:r></m:e></m:d></m:e><m:sup><m:r><w:rPr><w:rFonts w:ascii="Cambria Math" w:fareast="Cambria Math" w:h-ansi="Cambria Math" w:cs="Cambria Math"/><wx:font wx:val="Cambria Math"/><w:i/><w:sz w:val="24"/><w:sz-cs w:val="24"/></w:rPr><m:t>2</m:t></m:r></m:sup></m:sSup></m:oMath></m:oMathPara></w:p><w:sectPr wsp:rsidR="00000000"><w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" w:header="720" w:footer="720" w:gutter="0"/><w:cols w:space="720"/></w:sectPr></wx:sect></w:body></w:wordDocument>
+hIDATx^
+whdJVfU'
+UfkQh
+c=ptf
+b7wf;
+BcgNVBco]*
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<?mso-application progid="Word.Document"?>
+<w:wordDocument xmlns:aml="http://schemas.microsoft.com/aml/2001/core" xmlns:wpc="http://schemas.microsoft.com/office/word/2010/wordprocessingCanvas" xmlns:cx="http://schemas.microsoft.com/office/drawing/2014/chartex" xmlns:cx1="http://schemas.microsoft.com/office/drawing/2015/9/8/chartex" xmlns:cx2="http://schemas.microsoft.com/office/drawing/2015/10/21/chartex" xmlns:cx3="http://schemas.microsoft.com/office/drawing/2016/5/9/chartex" xmlns:cx4="http://schemas.microsoft.com/office/drawing/2016/5/10/chartex" xmlns:cx5="http://schemas.microsoft.com/office/drawing/2016/5/11/chartex" xmlns:cx6="http://schemas.microsoft.com/office/drawing/2016/5/12/chartex" xmlns:cx7="http://schemas.microsoft.com/office/drawing/2016/5/13/chartex" xmlns:cx8="http://schemas.microsoft.com/office/drawing/2016/5/14/chartex" xmlns:cr="http://schemas.microsoft.com/office/comments/2020/reactions" xmlns:dt="uuid:C2F41010-65B3-11d1-A29F-00AA00C14882" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:aink="http://schemas.microsoft.com/office/drawing/2016/ink" xmlns:am3d="http://schemas.microsoft.com/office/drawing/2017/model3d" xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:oel="http://schemas.microsoft.com/office/2019/extlst" xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:w10="urn:schemas-microsoft-com:office:word" xmlns:w="http://schemas.microsoft.com/office/word/2003/wordml" xmlns:w16cei="http://schemas.microsoft.com/office/word/2026/wordml/cei" xmlns:wx="http://schemas.microsoft.com/office/word/2003/auxHint" xmlns:wne="http://schemas.microsoft.com/office/word/2006/wordml" xmlns:wsp="http://schemas.microsoft.com/office/word/2003/wordml/sp2" xmlns:sl="http://schemas.microsoft.com/schemaLibrary/2003/core" w:macrosPresent="no" w:embeddedObjPresent="no" w:ocxPresent="no" xml:space="preserve"><w:ignoreSubtree w:val="http://schemas.microsoft.com/office/word/2003/wordml/sp2"/><o:DocumentProperties><o:Version>16</o:Version></o:DocumentProperties><w:docPr><w:view w:val="print"/><w:zoom w:val="best-fit" w:percent="193"/><w:doNotEmbedSystemFonts/><w:stylePaneFormatFilter w:val="3F01"/><w:defaultTabStop w:val="202"/><w:doNotHyphenateCaps/><w:drawingGridHorizontalSpacing w:val="120"/><w:drawingGridVerticalSpacing w:val="120"/><w:displayHorizontalDrawingGridEvery w:val="0"/><w:displayVerticalDrawingGridEvery w:val="3"/><w:useMarginsForDrawingGridOrigin/><w:punctuationKerning/><w:characterSpacingControl w:val="CompressPunctuation"/><w:pixelsPerInch w:val="72"/><w:validateAgainstSchema/><w:saveInvalidXML w:val="off"/><w:ignoreMixedContent w:val="off"/><w:alwaysShowPlaceholderText w:val="off"/><w:compat><w:breakWrappedTables/><w:snapToGridInCell/><w:wrapTextWithPunct/><w:useAsianBreakRules/><w:dontGrowAutofit/></w:compat><wsp:rsids><wsp:rsidRoot wsp:val="001A13E6"/><wsp:rsid wsp:val="0015028E"/><wsp:rsid wsp:val="001A13E6"/><wsp:rsid wsp:val="007F61BC"/><wsp:rsid wsp:val="00853724"/><wsp:rsid wsp:val="009D197E"/><wsp:rsid wsp:val="00C2692F"/><wsp:rsid wsp:val="00D01553"/><wsp:rsid wsp:val="00DB5735"/><wsp:rsid wsp:val="00E2052D"/></wsp:rsids></w:docPr><w:body><wx:sect><w:p wsp:rsidR="00853724" wsp:rsidRDefault="00853724" wsp:rsidP="00853724"><m:oMathPara><m:oMath><m:r><w:rPr><w:rFonts w:ascii="Cambria Math" w:h-ansi="Cambria Math"/><wx:font wx:val="Cambria Math"/><w:i/></w:rPr><m:t>
+</m:t></m:r></m:oMath></m:oMathPara></w:p><w:sectPr wsp:rsidR="00000000"><w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" w:header="720" w:footer="720" w:gutter="0"/><w:cols w:space="720"/></w:sectPr></wx:sect></w:body></w:wordDocument>
+IDAT8Oc
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<?mso-application progid="Word.Document"?>
+<w:wordDocument xmlns:aml="http://schemas.microsoft.com/aml/2001/core" xmlns:wpc="http://schemas.microsoft.com/office/word/2010/wordprocessingCanvas" xmlns:cx="http://schemas.microsoft.com/office/drawing/2014/chartex" xmlns:cx1="http://schemas.microsoft.com/office/drawing/2015/9/8/chartex" xmlns:cx2="http://schemas.microsoft.com/office/drawing/2015/10/21/chartex" xmlns:cx3="http://schemas.microsoft.com/office/drawing/2016/5/9/chartex" xmlns:cx4="http://schemas.microsoft.com/office/drawing/2016/5/10/chartex" xmlns:cx5="http://schemas.microsoft.com/office/drawing/2016/5/11/chartex" xmlns:cx6="http://schemas.microsoft.com/office/drawing/2016/5/12/chartex" xmlns:cx7="http://schemas.microsoft.com/office/drawing/2016/5/13/chartex" xmlns:cx8="http://schemas.microsoft.com/office/drawing/2016/5/14/chartex" xmlns:cr="http://schemas.microsoft.com/office/comments/2020/reactions" xmlns:dt="uuid:C2F41010-65B3-11d1-A29F-00AA00C14882" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:aink="http://schemas.microsoft.com/office/drawing/2016/ink" xmlns:am3d="http://schemas.microsoft.com/office/drawing/2017/model3d" xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:oel="http://schemas.microsoft.com/office/2019/extlst" xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:w10="urn:schemas-microsoft-com:office:word" xmlns:w="http://schemas.microsoft.com/office/word/2003/wordml" xmlns:w16cei="http://schemas.microsoft.com/office/word/2026/wordml/cei" xmlns:wx="http://schemas.microsoft.com/office/word/2003/auxHint" xmlns:wne="http://schemas.microsoft.com/office/word/2006/wordml" xmlns:wsp="http://schemas.microsoft.com/office/word/2003/wordml/sp2" xmlns:sl="http://schemas.microsoft.com/schemaLibrary/2003/core" w:macrosPresent="no" w:embeddedObjPresent="no" w:ocxPresent="no" xml:space="preserve"><w:ignoreSubtree w:val="http://schemas.microsoft.com/office/word/2003/wordml/sp2"/><o:DocumentProperties><o:Version>16</o:Version></o:DocumentProperties><w:docPr><w:view w:val="print"/><w:zoom w:val="best-fit" w:percent="193"/><w:doNotEmbedSystemFonts/><w:stylePaneFormatFilter w:val="3F01"/><w:defaultTabStop w:val="202"/><w:doNotHyphenateCaps/><w:drawingGridHorizontalSpacing w:val="120"/><w:drawingGridVerticalSpacing w:val="120"/><w:displayHorizontalDrawingGridEvery w:val="0"/><w:displayVerticalDrawingGridEvery w:val="3"/><w:useMarginsForDrawingGridOrigin/><w:punctuationKerning/><w:characterSpacingControl w:val="CompressPunctuation"/><w:pixelsPerInch w:val="72"/><w:validateAgainstSchema/><w:saveInvalidXML w:val="off"/><w:ignoreMixedContent w:val="off"/><w:alwaysShowPlaceholderText w:val="off"/><w:compat><w:breakWrappedTables/><w:snapToGridInCell/><w:wrapTextWithPunct/><w:useAsianBreakRules/><w:dontGrowAutofit/></w:compat><wsp:rsids><wsp:rsidRoot wsp:val="001A13E6"/><wsp:rsid wsp:val="0015028E"/><wsp:rsid wsp:val="001A13E6"/><wsp:rsid wsp:val="007F61BC"/><wsp:rsid wsp:val="00853724"/><wsp:rsid wsp:val="009D197E"/><wsp:rsid wsp:val="00C2692F"/><wsp:rsid wsp:val="00D01553"/><wsp:rsid wsp:val="00DB5735"/><wsp:rsid wsp:val="00E2052D"/></wsp:rsids></w:docPr><w:body><wx:sect><w:p wsp:rsidR="00853724" wsp:rsidRDefault="00853724" wsp:rsidP="00853724"><m:oMathPara><m:oMath><m:r><w:rPr><w:rFonts w:ascii="Cambria Math" w:h-ansi="Cambria Math"/><wx:font wx:val="Cambria Math"/><w:i/></w:rPr><m:t>
+</m:t></m:r></m:oMath></m:oMathPara></w:p><w:sectPr wsp:rsidR="00000000"><w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" w:header="720" w:footer="720" w:gutter="0"/><w:cols w:space="720"/></w:sectPr></wx:sect></w:body></w:wordDocument>
+IDAT8Oc
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<?mso-application progid="Word.Document"?>
+<w:wordDocument xmlns:aml="http://schemas.microsoft.com/aml/2001/core" xmlns:wpc="http://schemas.microsoft.com/office/word/2010/wordprocessingCanvas" xmlns:cx="http://schemas.microsoft.com/office/drawing/2014/chartex" xmlns:cx1="http://schemas.microsoft.com/office/drawing/2015/9/8/chartex" xmlns:cx2="http://schemas.microsoft.com/office/drawing/2015/10/21/chartex" xmlns:cx3="http://schemas.microsoft.com/office/drawing/2016/5/9/chartex" xmlns:cx4="http://schemas.microsoft.com/office/drawing/2016/5/10/chartex" xmlns:cx5="http://schemas.microsoft.com/office/drawing/2016/5/11/chartex" xmlns:cx6="http://schemas.microsoft.com/office/drawing/2016/5/12/chartex" xmlns:cx7="http://schemas.microsoft.com/office/drawing/2016/5/13/chartex" xmlns:cx8="http://schemas.microsoft.com/office/drawing/2016/5/14/chartex" xmlns:cr="http://schemas.microsoft.com/office/comments/2020/reactions" xmlns:dt="uuid:C2F41010-65B3-11d1-A29F-00AA00C14882" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:aink="http://schemas.microsoft.com/office/drawing/2016/ink" xmlns:am3d="http://schemas.microsoft.com/office/drawing/2017/model3d" xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:oel="http://schemas.microsoft.com/office/2019/extlst" xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:w10="urn:schemas-microsoft-com:office:word" xmlns:w="http://schemas.microsoft.com/office/word/2003/wordml" xmlns:w16cei="http://schemas.microsoft.com/office/word/2026/wordml/cei" xmlns:wx="http://schemas.microsoft.com/office/word/2003/auxHint" xmlns:wne="http://schemas.microsoft.com/office/word/2006/wordml" xmlns:wsp="http://schemas.microsoft.com/office/word/2003/wordml/sp2" xmlns:sl="http://schemas.microsoft.com/schemaLibrary/2003/core" w:macrosPresent="no" w:embeddedObjPresent="no" w:ocxPresent="no" xml:space="preserve"><w:ignoreSubtree w:val="http://schemas.microsoft.com/office/word/2003/wordml/sp2"/><o:DocumentProperties><o:Version>16</o:Version></o:DocumentProperties><w:docPr><w:view w:val="print"/><w:zoom w:val="best-fit" w:percent="193"/><w:doNotEmbedSystemFonts/><w:stylePaneFormatFilter w:val="3F01"/><w:defaultTabStop w:val="202"/><w:doNotHyphenateCaps/><w:drawingGridHorizontalSpacing w:val="120"/><w:drawingGridVerticalSpacing w:val="120"/><w:displayHorizontalDrawingGridEvery w:val="0"/><w:displayVerticalDrawingGridEvery w:val="3"/><w:useMarginsForDrawingGridOrigin/><w:punctuationKerning/><w:characterSpacingControl w:val="CompressPunctuation"/><w:pixelsPerInch w:val="72"/><w:validateAgainstSchema/><w:saveInvalidXML w:val="off"/><w:ignoreMixedContent w:val="off"/><w:alwaysShowPlaceholderText w:val="off"/><w:compat><w:breakWrappedTables/><w:snapToGridInCell/><w:wrapTextWithPunct/><w:useAsianBreakRules/><w:dontGrowAutofit/></w:compat><wsp:rsids><wsp:rsidRoot wsp:val="001A13E6"/><wsp:rsid wsp:val="0015028E"/><wsp:rsid wsp:val="001A13E6"/><wsp:rsid wsp:val="007F61BC"/><wsp:rsid wsp:val="009D197E"/><wsp:rsid wsp:val="00AC7C83"/><wsp:rsid wsp:val="00C2692F"/><wsp:rsid wsp:val="00D01553"/><wsp:rsid wsp:val="00DB5735"/><wsp:rsid wsp:val="00E2052D"/></wsp:rsids></w:docPr><w:body><wx:sect><w:p wsp:rsidR="00AC7C83" wsp:rsidRDefault="00AC7C83" wsp:rsidP="00AC7C83"><m:oMathPara><m:oMath><m:bar><m:barPr><m:ctrlPr><w:rPr><w:rFonts w:ascii="Cambria Math" w:fareast="Cambria Math" w:h-ansi="Cambria Math" w:cs="Cambria Math"/><wx:font wx:val="Cambria Math"/><w:sz w:val="24"/><w:sz-cs w:val="24"/></w:rPr></m:ctrlPr></m:barPr><m:e><m:r><w:rPr><w:rFonts w:ascii="Cambria Math" w:fareast="Cambria Math" w:h-ansi="Cambria Math" w:cs="Cambria Math"/><wx:font wx:val="Cambria Math"/><w:i/><w:sz w:val="24"/><w:sz-cs w:val="24"/></w:rPr><m:t>r</m:t></m:r></m:e></m:bar><m:r><w:rPr><w:rFonts w:ascii="Cambria Math" w:fareast="Cambria Math" w:h-ansi="Cambria Math" w:cs="Cambria Math"/><wx:font wx:val="Cambria Math"/><w:i/><w:sz w:val="24"/><w:sz-cs w:val="24"/></w:rPr><m:t> </m:t></m:r></m:oMath></m:oMathPara></w:p><w:sectPr wsp:rsidR="00000000"><w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" w:header="720" w:footer="720" w:gutter="0"/><w:cols w:space="720"/></w:sectPr></wx:sect></w:body></w:wordDocument>
+IDAT8Oc
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<?mso-application progid="Word.Document"?>
+<w:wordDocument xmlns:aml="http://schemas.microsoft.com/aml/2001/core" xmlns:wpc="http://schemas.microsoft.com/office/word/2010/wordprocessingCanvas" xmlns:cx="http://schemas.microsoft.com/office/drawing/2014/chartex" xmlns:cx1="http://schemas.microsoft.com/office/drawing/2015/9/8/chartex" xmlns:cx2="http://schemas.microsoft.com/office/drawing/2015/10/21/chartex" xmlns:cx3="http://schemas.microsoft.com/office/drawing/2016/5/9/chartex" xmlns:cx4="http://schemas.microsoft.com/office/drawing/2016/5/10/chartex" xmlns:cx5="http://schemas.microsoft.com/office/drawing/2016/5/11/chartex" xmlns:cx6="http://schemas.microsoft.com/office/drawing/2016/5/12/chartex" xmlns:cx7="http://schemas.microsoft.com/office/drawing/2016/5/13/chartex" xmlns:cx8="http://schemas.microsoft.com/office/drawing/2016/5/14/chartex" xmlns:cr="http://schemas.microsoft.com/office/comments/2020/reactions" xmlns:dt="uuid:C2F41010-65B3-11d1-A29F-00AA00C14882" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:aink="http://schemas.microsoft.com/office/drawing/2016/ink" xmlns:am3d="http://schemas.microsoft.com/office/drawing/2017/model3d" xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:oel="http://schemas.microsoft.com/office/2019/extlst" xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:w10="urn:schemas-microsoft-com:office:word" xmlns:w="http://schemas.microsoft.com/office/word/2003/wordml" xmlns:w16cei="http://schemas.microsoft.com/office/word/2026/wordml/cei" xmlns:wx="http://schemas.microsoft.com/office/word/2003/auxHint" xmlns:wne="http://schemas.microsoft.com/office/word/2006/wordml" xmlns:wsp="http://schemas.microsoft.com/office/word/2003/wordml/sp2" xmlns:sl="http://schemas.microsoft.com/schemaLibrary/2003/core" w:macrosPresent="no" w:embeddedObjPresent="no" w:ocxPresent="no" xml:space="preserve"><w:ignoreSubtree w:val="http://schemas.microsoft.com/office/word/2003/wordml/sp2"/><o:DocumentProperties><o:Version>16</o:Version></o:DocumentProperties><w:docPr><w:view w:val="print"/><w:zoom w:val="best-fit" w:percent="193"/><w:doNotEmbedSystemFonts/><w:stylePaneFormatFilter w:val="3F01"/><w:defaultTabStop w:val="202"/><w:doNotHyphenateCaps/><w:drawingGridHorizontalSpacing w:val="120"/><w:drawingGridVerticalSpacing w:val="120"/><w:displayHorizontalDrawingGridEvery w:val="0"/><w:displayVerticalDrawingGridEvery w:val="3"/><w:useMarginsForDrawingGridOrigin/><w:punctuationKerning/><w:characterSpacingControl w:val="CompressPunctuation"/><w:pixelsPerInch w:val="72"/><w:validateAgainstSchema/><w:saveInvalidXML w:val="off"/><w:ignoreMixedContent w:val="off"/><w:alwaysShowPlaceholderText w:val="off"/><w:compat><w:breakWrappedTables/><w:snapToGridInCell/><w:wrapTextWithPunct/><w:useAsianBreakRules/><w:dontGrowAutofit/></w:compat><wsp:rsids><wsp:rsidRoot wsp:val="001A13E6"/><wsp:rsid wsp:val="0015028E"/><wsp:rsid wsp:val="001A13E6"/><wsp:rsid wsp:val="007F61BC"/><wsp:rsid wsp:val="009D197E"/><wsp:rsid wsp:val="00AC7C83"/><wsp:rsid wsp:val="00C2692F"/><wsp:rsid wsp:val="00D01553"/><wsp:rsid wsp:val="00DB5735"/><wsp:rsid wsp:val="00E2052D"/></wsp:rsids></w:docPr><w:body><wx:sect><w:p wsp:rsidR="00AC7C83" wsp:rsidRDefault="00AC7C83" wsp:rsidP="00AC7C83"><m:oMathPara><m:oMath><m:bar><m:barPr><m:ctrlPr><w:rPr><w:rFonts w:ascii="Cambria Math" w:fareast="Cambria Math" w:h-ansi="Cambria Math" w:cs="Cambria Math"/><wx:font wx:val="Cambria Math"/><w:sz w:val="24"/><w:sz-cs w:val="24"/></w:rPr></m:ctrlPr></m:barPr><m:e><m:r><w:rPr><w:rFonts w:ascii="Cambria Math" w:fareast="Cambria Math" w:h-ansi="Cambria Math" w:cs="Cambria Math"/><wx:font wx:val="Cambria Math"/><w:i/><w:sz w:val="24"/><w:sz-cs w:val="24"/></w:rPr><m:t>r</m:t></m:r></m:e></m:bar><m:r><w:rPr><w:rFonts w:ascii="Cambria Math" w:fareast="Cambria Math" w:h-ansi="Cambria Math" w:cs="Cambria Math"/><wx:font wx:val="Cambria Math"/><w:i/><w:sz w:val="24"/><w:sz-cs w:val="24"/></w:rPr><m:t> </m:t></m:r></m:oMath></m:oMathPara></w:p><w:sectPr wsp:rsidR="00000000"><w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" w:header="720" w:footer="720" w:gutter="0"/><w:cols w:space="720"/></w:sectPr></wx:sect></w:body></w:wordDocument>
+IDAT8Oc
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<?mso-application progid="Word.Document"?>
+<w:wordDocument xmlns:aml="http://schemas.microsoft.com/aml/2001/core" xmlns:wpc="http://schemas.microsoft.com/office/word/2010/wordprocessingCanvas" xmlns:cx="http://schemas.microsoft.com/office/drawing/2014/chartex" xmlns:cx1="http://schemas.microsoft.com/office/drawing/2015/9/8/chartex" xmlns:cx2="http://schemas.microsoft.com/office/drawing/2015/10/21/chartex" xmlns:cx3="http://schemas.microsoft.com/office/drawing/2016/5/9/chartex" xmlns:cx4="http://schemas.microsoft.com/office/drawing/2016/5/10/chartex" xmlns:cx5="http://schemas.microsoft.com/office/drawing/2016/5/11/chartex" xmlns:cx6="http://schemas.microsoft.com/office/drawing/2016/5/12/chartex" xmlns:cx7="http://schemas.microsoft.com/office/drawing/2016/5/13/chartex" xmlns:cx8="http://schemas.microsoft.com/office/drawing/2016/5/14/chartex" xmlns:cr="http://schemas.microsoft.com/office/comments/2020/reactions" xmlns:dt="uuid:C2F41010-65B3-11d1-A29F-00AA00C14882" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:aink="http://schemas.microsoft.com/office/drawing/2016/ink" xmlns:am3d="http://schemas.microsoft.com/office/drawing/2017/model3d" xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:oel="http://schemas.microsoft.com/office/2019/extlst" xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:w10="urn:schemas-microsoft-com:office:word" xmlns:w="http://schemas.microsoft.com/office/word/2003/wordml" xmlns:w16cei="http://schemas.microsoft.com/office/word/2026/wordml/cei" xmlns:wx="http://schemas.microsoft.com/office/word/2003/auxHint" xmlns:wne="http://schemas.microsoft.com/office/word/2006/wordml" xmlns:wsp="http://schemas.microsoft.com/office/word/2003/wordml/sp2" xmlns:sl="http://schemas.microsoft.com/schemaLibrary/2003/core" w:macrosPresent="no" w:embeddedObjPresent="no" w:ocxPresent="no" xml:space="preserve"><w:ignoreSubtree w:val="http://schemas.microsoft.com/office/word/2003/wordml/sp2"/><o:DocumentProperties><o:Version>16</o:Version></o:DocumentProperties><w:docPr><w:view w:val="print"/><w:zoom w:val="best-fit" w:percent="193"/><w:doNotEmbedSystemFonts/><w:stylePaneFormatFilter w:val="3F01"/><w:defaultTabStop w:val="202"/><w:doNotHyphenateCaps/><w:drawingGridHorizontalSpacing w:val="120"/><w:drawingGridVerticalSpacing w:val="120"/><w:displayHorizontalDrawingGridEvery w:val="0"/><w:displayVerticalDrawingGridEvery w:val="3"/><w:useMarginsForDrawingGridOrigin/><w:punctuationKerning/><w:characterSpacingControl w:val="CompressPunctuation"/><w:pixelsPerInch w:val="72"/><w:validateAgainstSchema/><w:saveInvalidXML w:val="off"/><w:ignoreMixedContent w:val="off"/><w:alwaysShowPlaceholderText w:val="off"/><w:compat><w:breakWrappedTables/><w:snapToGridInCell/><w:wrapTextWithPunct/><w:useAsianBreakRules/><w:dontGrowAutofit/></w:compat><wsp:rsids><wsp:rsidRoot wsp:val="001A13E6"/><wsp:rsid wsp:val="0015028E"/><wsp:rsid wsp:val="00184B2F"/><wsp:rsid wsp:val="001A13E6"/><wsp:rsid wsp:val="007F61BC"/><wsp:rsid wsp:val="009D197E"/><wsp:rsid wsp:val="00C2692F"/><wsp:rsid wsp:val="00D01553"/><wsp:rsid wsp:val="00DB5735"/><wsp:rsid wsp:val="00E2052D"/></wsp:rsids></w:docPr><w:body><wx:sect><w:p wsp:rsidR="00184B2F" wsp:rsidRDefault="00184B2F" wsp:rsidP="00184B2F"><m:oMathPara><m:oMath><m:r><w:rPr><w:rFonts w:ascii="Cambria Math" w:fareast="Cambria Math" w:h-ansi="Cambria Math" w:cs="Cambria Math"/><wx:font wx:val="Cambria Math"/><w:i/><w:sz w:val="24"/><w:sz-cs w:val="24"/></w:rPr><m:t>C</m:t></m:r></m:oMath></m:oMathPara></w:p><w:sectPr wsp:rsidR="00000000"><w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" w:header="720" w:footer="720" w:gutter="0"/><w:cols w:space="720"/></w:sectPr></wx:sect></w:body></w:wordDocument>
+YQ<[U
+YQ<[U
+IDAT8O
+5!9]]f
+3p<bKiy
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<?mso-application progid="Word.Document"?>
+<w:wordDocument xmlns:aml="http://schemas.microsoft.com/aml/2001/core" xmlns:wpc="http://schemas.microsoft.com/office/word/2010/wordprocessingCanvas" xmlns:cx="http://schemas.microsoft.com/office/drawing/2014/chartex" xmlns:cx1="http://schemas.microsoft.com/office/drawing/2015/9/8/chartex" xmlns:cx2="http://schemas.microsoft.com/office/drawing/2015/10/21/chartex" xmlns:cx3="http://schemas.microsoft.com/office/drawing/2016/5/9/chartex" xmlns:cx4="http://schemas.microsoft.com/office/drawing/2016/5/10/chartex" xmlns:cx5="http://schemas.microsoft.com/office/drawing/2016/5/11/chartex" xmlns:cx6="http://schemas.microsoft.com/office/drawing/2016/5/12/chartex" xmlns:cx7="http://schemas.microsoft.com/office/drawing/2016/5/13/chartex" xmlns:cx8="http://schemas.microsoft.com/office/drawing/2016/5/14/chartex" xmlns:cr="http://schemas.microsoft.com/office/comments/2020/reactions" xmlns:dt="uuid:C2F41010-65B3-11d1-A29F-00AA00C14882" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:aink="http://schemas.microsoft.com/office/drawing/2016/ink" xmlns:am3d="http://schemas.microsoft.com/office/drawing/2017/model3d" xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:oel="http://schemas.microsoft.com/office/2019/extlst" xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:w10="urn:schemas-microsoft-com:office:word" xmlns:w="http://schemas.microsoft.com/office/word/2003/wordml" xmlns:w16cei="http://schemas.microsoft.com/office/word/2026/wordml/cei" xmlns:wx="http://schemas.microsoft.com/office/word/2003/auxHint" xmlns:wne="http://schemas.microsoft.com/office/word/2006/wordml" xmlns:wsp="http://schemas.microsoft.com/office/word/2003/wordml/sp2" xmlns:sl="http://schemas.microsoft.com/schemaLibrary/2003/core" w:macrosPresent="no" w:embeddedObjPresent="no" w:ocxPresent="no" xml:space="preserve"><w:ignoreSubtree w:val="http://schemas.microsoft.com/office/word/2003/wordml/sp2"/><o:DocumentProperties><o:Version>16</o:Version></o:DocumentProperties><w:docPr><w:view w:val="print"/><w:zoom w:val="best-fit" w:percent="193"/><w:doNotEmbedSystemFonts/><w:stylePaneFormatFilter w:val="3F01"/><w:defaultTabStop w:val="202"/><w:doNotHyphenateCaps/><w:drawingGridHorizontalSpacing w:val="120"/><w:drawingGridVerticalSpacing w:val="120"/><w:displayHorizontalDrawingGridEvery w:val="0"/><w:displayVerticalDrawingGridEvery w:val="3"/><w:useMarginsForDrawingGridOrigin/><w:punctuationKerning/><w:characterSpacingControl w:val="CompressPunctuation"/><w:pixelsPerInch w:val="72"/><w:validateAgainstSchema/><w:saveInvalidXML w:val="off"/><w:ignoreMixedContent w:val="off"/><w:alwaysShowPlaceholderText w:val="off"/><w:compat><w:breakWrappedTables/><w:snapToGridInCell/><w:wrapTextWithPunct/><w:useAsianBreakRules/><w:dontGrowAutofit/></w:compat><wsp:rsids><wsp:rsidRoot wsp:val="001A13E6"/><wsp:rsid wsp:val="0015028E"/><wsp:rsid wsp:val="00184B2F"/><wsp:rsid wsp:val="001A13E6"/><wsp:rsid wsp:val="007F61BC"/><wsp:rsid wsp:val="009D197E"/><wsp:rsid wsp:val="00C2692F"/><wsp:rsid wsp:val="00D01553"/><wsp:rsid wsp:val="00DB5735"/><wsp:rsid wsp:val="00E2052D"/></wsp:rsids></w:docPr><w:body><wx:sect><w:p wsp:rsidR="00184B2F" wsp:rsidRDefault="00184B2F" wsp:rsidP="00184B2F"><m:oMathPara><m:oMath><m:r><w:rPr><w:rFonts w:ascii="Cambria Math" w:fareast="Cambria Math" w:h-ansi="Cambria Math" w:cs="Cambria Math"/><wx:font wx:val="Cambria Math"/><w:i/><w:sz w:val="24"/><w:sz-cs w:val="24"/></w:rPr><m:t>C</m:t></m:r></m:oMath></m:oMathPara></w:p><w:sectPr wsp:rsidR="00000000"><w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" w:header="720" w:footer="720" w:gutter="0"/><w:cols w:space="720"/></w:sectPr></wx:sect></w:body></w:wordDocument>
+YQ<[U
+YQ<[U
+IDAT8O
+5!9]]f
+3p<bKiy
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<?mso-application progid="Word.Document"?>
+<w:wordDocument xmlns:aml="http://schemas.microsoft.com/aml/2001/core" xmlns:wpc="http://schemas.microsoft.com/office/word/2010/wordprocessingCanvas" xmlns:cx="http://schemas.microsoft.com/office/drawing/2014/chartex" xmlns:cx1="http://schemas.microsoft.com/office/drawing/2015/9/8/chartex" xmlns:cx2="http://schemas.microsoft.com/office/drawing/2015/10/21/chartex" xmlns:cx3="http://schemas.microsoft.com/office/drawing/2016/5/9/chartex" xmlns:cx4="http://schemas.microsoft.com/office/drawing/2016/5/10/chartex" xmlns:cx5="http://schemas.microsoft.com/office/drawing/2016/5/11/chartex" xmlns:cx6="http://schemas.microsoft.com/office/drawing/2016/5/12/chartex" xmlns:cx7="http://schemas.microsoft.com/office/drawing/2016/5/13/chartex" xmlns:cx8="http://schemas.microsoft.com/office/drawing/2016/5/14/chartex" xmlns:cr="http://schemas.microsoft.com/office/comments/2020/reactions" xmlns:dt="uuid:C2F41010-65B3-11d1-A29F-00AA00C14882" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:aink="http://schemas.microsoft.com/office/drawing/2016/ink" xmlns:am3d="http://schemas.microsoft.com/office/drawing/2017/model3d" xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:oel="http://schemas.microsoft.com/office/2019/extlst" xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:w10="urn:schemas-microsoft-com:office:word" xmlns:w="http://schemas.microsoft.com/office/word/2003/wordml" xmlns:w16cei="http://schemas.microsoft.com/office/word/2026/wordml/cei" xmlns:wx="http://schemas.microsoft.com/office/word/2003/auxHint" xmlns:wne="http://schemas.microsoft.com/office/word/2006/wordml" xmlns:wsp="http://schemas.microsoft.com/office/word/2003/wordml/sp2" xmlns:sl="http://schemas.microsoft.com/schemaLibrary/2003/core" w:macrosPresent="no" w:embeddedObjPresent="no" w:ocxPresent="no" xml:space="preserve"><w:ignoreSubtree w:val="http://schemas.microsoft.com/office/word/2003/wordml/sp2"/><o:DocumentProperties><o:Version>16</o:Version></o:DocumentProperties><w:docPr><w:view w:val="print"/><w:zoom w:val="best-fit" w:percent="193"/><w:doNotEmbedSystemFonts/><w:stylePaneFormatFilter w:val="3F01"/><w:defaultTabStop w:val="202"/><w:doNotHyphenateCaps/><w:drawingGridHorizontalSpacing w:val="120"/><w:drawingGridVerticalSpacing w:val="120"/><w:displayHorizontalDrawingGridEvery w:val="0"/><w:displayVerticalDrawingGridEvery w:val="3"/><w:useMarginsForDrawingGridOrigin/><w:punctuationKerning/><w:characterSpacingControl w:val="CompressPunctuation"/><w:pixelsPerInch w:val="72"/><w:validateAgainstSchema/><w:saveInvalidXML w:val="off"/><w:ignoreMixedContent w:val="off"/><w:alwaysShowPlaceholderText w:val="off"/><w:compat><w:breakWrappedTables/><w:snapToGridInCell/><w:wrapTextWithPunct/><w:useAsianBreakRules/><w:dontGrowAutofit/></w:compat><wsp:rsids><wsp:rsidRoot wsp:val="001A13E6"/><wsp:rsid wsp:val="0015028E"/><wsp:rsid wsp:val="001A13E6"/><wsp:rsid wsp:val="002543FD"/><wsp:rsid wsp:val="007F61BC"/><wsp:rsid wsp:val="009D197E"/><wsp:rsid wsp:val="00C2692F"/><wsp:rsid wsp:val="00D01553"/><wsp:rsid wsp:val="00DB5735"/><wsp:rsid wsp:val="00E2052D"/></wsp:rsids></w:docPr><w:body><wx:sect><w:p wsp:rsidR="002543FD" wsp:rsidRDefault="002543FD" wsp:rsidP="002543FD"><m:oMathPara><m:oMath><m:r><w:rPr><w:rFonts w:ascii="Cambria Math" w:fareast="Cambria Math" w:h-ansi="Cambria Math" w:cs="Cambria Math"/><wx:font wx:val="Cambria Math"/><w:i/><w:sz w:val="24"/><w:sz-cs w:val="24"/></w:rPr><m:t>C</m:t></m:r></m:oMath></m:oMathPara></w:p><w:sectPr wsp:rsidR="00000000"><w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" w:header="720" w:footer="720" w:gutter="0"/><w:cols w:space="720"/></w:sectPr></wx:sect></w:body></w:wordDocument>
+YQ<[U
+YQ<[U
+IDAT8O
+5!9]]f
+3p<bKiy
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<?mso-application progid="Word.Document"?>
+<w:wordDocument xmlns:aml="http://schemas.microsoft.com/aml/2001/core" xmlns:wpc="http://schemas.microsoft.com/office/word/2010/wordprocessingCanvas" xmlns:cx="http://schemas.microsoft.com/office/drawing/2014/chartex" xmlns:cx1="http://schemas.microsoft.com/office/drawing/2015/9/8/chartex" xmlns:cx2="http://schemas.microsoft.com/office/drawing/2015/10/21/chartex" xmlns:cx3="http://schemas.microsoft.com/office/drawing/2016/5/9/chartex" xmlns:cx4="http://schemas.microsoft.com/office/drawing/2016/5/10/chartex" xmlns:cx5="http://schemas.microsoft.com/office/drawing/2016/5/11/chartex" xmlns:cx6="http://schemas.microsoft.com/office/drawing/2016/5/12/chartex" xmlns:cx7="http://schemas.microsoft.com/office/drawing/2016/5/13/chartex" xmlns:cx8="http://schemas.microsoft.com/office/drawing/2016/5/14/chartex" xmlns:cr="http://schemas.microsoft.com/office/comments/2020/reactions" xmlns:dt="uuid:C2F41010-65B3-11d1-A29F-00AA00C14882" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:aink="http://schemas.microsoft.com/office/drawing/2016/ink" xmlns:am3d="http://schemas.microsoft.com/office/drawing/2017/model3d" xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:oel="http://schemas.microsoft.com/office/2019/extlst" xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:w10="urn:schemas-microsoft-com:office:word" xmlns:w="http://schemas.microsoft.com/office/word/2003/wordml" xmlns:w16cei="http://schemas.microsoft.com/office/word/2026/wordml/cei" xmlns:wx="http://schemas.microsoft.com/office/word/2003/auxHint" xmlns:wne="http://schemas.microsoft.com/office/word/2006/wordml" xmlns:wsp="http://schemas.microsoft.com/office/word/2003/wordml/sp2" xmlns:sl="http://schemas.microsoft.com/schemaLibrary/2003/core" w:macrosPresent="no" w:embeddedObjPresent="no" w:ocxPresent="no" xml:space="preserve"><w:ignoreSubtree w:val="http://schemas.microsoft.com/office/word/2003/wordml/sp2"/><o:DocumentProperties><o:Version>16</o:Version></o:DocumentProperties><w:docPr><w:view w:val="print"/><w:zoom w:val="best-fit" w:percent="193"/><w:doNotEmbedSystemFonts/><w:stylePaneFormatFilter w:val="3F01"/><w:defaultTabStop w:val="202"/><w:doNotHyphenateCaps/><w:drawingGridHorizontalSpacing w:val="120"/><w:drawingGridVerticalSpacing w:val="120"/><w:displayHorizontalDrawingGridEvery w:val="0"/><w:displayVerticalDrawingGridEvery w:val="3"/><w:useMarginsForDrawingGridOrigin/><w:punctuationKerning/><w:characterSpacingControl w:val="CompressPunctuation"/><w:pixelsPerInch w:val="72"/><w:validateAgainstSchema/><w:saveInvalidXML w:val="off"/><w:ignoreMixedContent w:val="off"/><w:alwaysShowPlaceholderText w:val="off"/><w:compat><w:breakWrappedTables/><w:snapToGridInCell/><w:wrapTextWithPunct/><w:useAsianBreakRules/><w:dontGrowAutofit/></w:compat><wsp:rsids><wsp:rsidRoot wsp:val="001A13E6"/><wsp:rsid wsp:val="0015028E"/><wsp:rsid wsp:val="001A13E6"/><wsp:rsid wsp:val="002543FD"/><wsp:rsid wsp:val="007F61BC"/><wsp:rsid wsp:val="009D197E"/><wsp:rsid wsp:val="00C2692F"/><wsp:rsid wsp:val="00D01553"/><wsp:rsid wsp:val="00DB5735"/><wsp:rsid wsp:val="00E2052D"/></wsp:rsids></w:docPr><w:body><wx:sect><w:p wsp:rsidR="002543FD" wsp:rsidRDefault="002543FD" wsp:rsidP="002543FD"><m:oMathPara><m:oMath><m:r><w:rPr><w:rFonts w:ascii="Cambria Math" w:fareast="Cambria Math" w:h-ansi="Cambria Math" w:cs="Cambria Math"/><wx:font wx:val="Cambria Math"/><w:i/><w:sz w:val="24"/><w:sz-cs w:val="24"/></w:rPr><m:t>C</m:t></m:r></m:oMath></m:oMathPara></w:p><w:sectPr wsp:rsidR="00000000"><w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" w:header="720" w:footer="720" w:gutter="0"/><w:cols w:space="720"/></w:sectPr></wx:sect></w:body></w:wordDocument>
+YQ<[U
+YQ<[U
+IDAT8O
+5!9]]f
+3p<bKiy
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<?mso-application progid="Word.Document"?>
+<w:wordDocument xmlns:aml="http://schemas.microsoft.com/aml/2001/core" xmlns:wpc="http://schemas.microsoft.com/office/word/2010/wordprocessingCanvas" xmlns:cx="http://schemas.microsoft.com/office/drawing/2014/chartex" xmlns:cx1="http://schemas.microsoft.com/office/drawing/2015/9/8/chartex" xmlns:cx2="http://schemas.microsoft.com/office/drawing/2015/10/21/chartex" xmlns:cx3="http://schemas.microsoft.com/office/drawing/2016/5/9/chartex" xmlns:cx4="http://schemas.microsoft.com/office/drawing/2016/5/10/chartex" xmlns:cx5="http://schemas.microsoft.com/office/drawing/2016/5/11/chartex" xmlns:cx6="http://schemas.microsoft.com/office/drawing/2016/5/12/chartex" xmlns:cx7="http://schemas.microsoft.com/office/drawing/2016/5/13/chartex" xmlns:cx8="http://schemas.microsoft.com/office/drawing/2016/5/14/chartex" xmlns:cr="http://schemas.microsoft.com/office/comments/2020/reactions" xmlns:dt="uuid:C2F41010-65B3-11d1-A29F-00AA00C14882" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:aink="http://schemas.microsoft.com/office/drawing/2016/ink" xmlns:am3d="http://schemas.microsoft.com/office/drawing/2017/model3d" xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:oel="http://schemas.microsoft.com/office/2019/extlst" xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:w10="urn:schemas-microsoft-com:office:word" xmlns:w="http://schemas.microsoft.com/office/word/2003/wordml" xmlns:w16cei="http://schemas.microsoft.com/office/word/2026/wordml/cei" xmlns:wx="http://schemas.microsoft.com/office/word/2003/auxHint" xmlns:wne="http://schemas.microsoft.com/office/word/2006/wordml" xmlns:wsp="http://schemas.microsoft.com/office/word/2003/wordml/sp2" xmlns:sl="http://schemas.microsoft.com/schemaLibrary/2003/core" w:macrosPresent="no" w:embeddedObjPresent="no" w:ocxPresent="no" xml:space="preserve"><w:ignoreSubtree w:val="http://schemas.microsoft.com/office/word/2003/wordml/sp2"/><o:DocumentProperties><o:Version>16</o:Version></o:DocumentProperties><w:docPr><w:view w:val="print"/><w:zoom w:val="best-fit" w:percent="193"/><w:doNotEmbedSystemFonts/><w:stylePaneFormatFilter w:val="3F01"/><w:defaultTabStop w:val="202"/><w:doNotHyphenateCaps/><w:drawingGridHorizontalSpacing w:val="120"/><w:drawingGridVerticalSpacing w:val="120"/><w:displayHorizontalDrawingGridEvery w:val="0"/><w:displayVerticalDrawingGridEvery w:val="3"/><w:useMarginsForDrawingGridOrigin/><w:punctuationKerning/><w:characterSpacingControl w:val="CompressPunctuation"/><w:pixelsPerInch w:val="72"/><w:validateAgainstSchema/><w:saveInvalidXML w:val="off"/><w:ignoreMixedContent w:val="off"/><w:alwaysShowPlaceholderText w:val="off"/><w:compat><w:breakWrappedTables/><w:snapToGridInCell/><w:wrapTextWithPunct/><w:useAsianBreakRules/><w:dontGrowAutofit/></w:compat><wsp:rsids><wsp:rsidRoot wsp:val="001A13E6"/><wsp:rsid wsp:val="0015028E"/><wsp:rsid wsp:val="001A13E6"/><wsp:rsid wsp:val="007F61BC"/><wsp:rsid wsp:val="009D197E"/><wsp:rsid wsp:val="00C2692F"/><wsp:rsid wsp:val="00D01553"/><wsp:rsid wsp:val="00DB5735"/><wsp:rsid wsp:val="00E2052D"/><wsp:rsid wsp:val="00F73BF3"/></wsp:rsids></w:docPr><w:body><wx:sect><w:p wsp:rsidR="00F73BF3" wsp:rsidRDefault="00F73BF3" wsp:rsidP="00F73BF3"><m:oMathPara><m:oMath><m:r><w:rPr><w:rFonts w:ascii="Cambria Math" w:h-ansi="Cambria Math"/><wx:font wx:val="Cambria Math"/><w:i/></w:rPr><m:t>
+</m:t></m:r></m:oMath></m:oMathPara></w:p><w:sectPr wsp:rsidR="00000000"><w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" w:header="720" w:footer="720" w:gutter="0"/><w:cols w:space="720"/></w:sectPr></wx:sect></w:body></w:wordDocument>
+IDAT(Sc
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<?mso-application progid="Word.Document"?>
+<w:wordDocument xmlns:aml="http://schemas.microsoft.com/aml/2001/core" xmlns:wpc="http://schemas.microsoft.com/office/word/2010/wordprocessingCanvas" xmlns:cx="http://schemas.microsoft.com/office/drawing/2014/chartex" xmlns:cx1="http://schemas.microsoft.com/office/drawing/2015/9/8/chartex" xmlns:cx2="http://schemas.microsoft.com/office/drawing/2015/10/21/chartex" xmlns:cx3="http://schemas.microsoft.com/office/drawing/2016/5/9/chartex" xmlns:cx4="http://schemas.microsoft.com/office/drawing/2016/5/10/chartex" xmlns:cx5="http://schemas.microsoft.com/office/drawing/2016/5/11/chartex" xmlns:cx6="http://schemas.microsoft.com/office/drawing/2016/5/12/chartex" xmlns:cx7="http://schemas.microsoft.com/office/drawing/2016/5/13/chartex" xmlns:cx8="http://schemas.microsoft.com/office/drawing/2016/5/14/chartex" xmlns:cr="http://schemas.microsoft.com/office/comments/2020/reactions" xmlns:dt="uuid:C2F41010-65B3-11d1-A29F-00AA00C14882" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:aink="http://schemas.microsoft.com/office/drawing/2016/ink" xmlns:am3d="http://schemas.microsoft.com/office/drawing/2017/model3d" xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:oel="http://schemas.microsoft.com/office/2019/extlst" xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:w10="urn:schemas-microsoft-com:office:word" xmlns:w="http://schemas.microsoft.com/office/word/2003/wordml" xmlns:w16cei="http://schemas.microsoft.com/office/word/2026/wordml/cei" xmlns:wx="http://schemas.microsoft.com/office/word/2003/auxHint" xmlns:wne="http://schemas.microsoft.com/office/word/2006/wordml" xmlns:wsp="http://schemas.microsoft.com/office/word/2003/wordml/sp2" xmlns:sl="http://schemas.microsoft.com/schemaLibrary/2003/core" w:macrosPresent="no" w:embeddedObjPresent="no" w:ocxPresent="no" xml:space="preserve"><w:ignoreSubtree w:val="http://schemas.microsoft.com/office/word/2003/wordml/sp2"/><o:DocumentProperties><o:Version>16</o:Version></o:DocumentProperties><w:docPr><w:view w:val="print"/><w:zoom w:val="best-fit" w:percent="193"/><w:doNotEmbedSystemFonts/><w:stylePaneFormatFilter w:val="3F01"/><w:defaultTabStop w:val="202"/><w:doNotHyphenateCaps/><w:drawingGridHorizontalSpacing w:val="120"/><w:drawingGridVerticalSpacing w:val="120"/><w:displayHorizontalDrawingGridEvery w:val="0"/><w:displayVerticalDrawingGridEvery w:val="3"/><w:useMarginsForDrawingGridOrigin/><w:punctuationKerning/><w:characterSpacingControl w:val="CompressPunctuation"/><w:pixelsPerInch w:val="72"/><w:validateAgainstSchema/><w:saveInvalidXML w:val="off"/><w:ignoreMixedContent w:val="off"/><w:alwaysShowPlaceholderText w:val="off"/><w:compat><w:breakWrappedTables/><w:snapToGridInCell/><w:wrapTextWithPunct/><w:useAsianBreakRules/><w:dontGrowAutofit/></w:compat><wsp:rsids><wsp:rsidRoot wsp:val="001A13E6"/><wsp:rsid wsp:val="0015028E"/><wsp:rsid wsp:val="001A13E6"/><wsp:rsid wsp:val="007F61BC"/><wsp:rsid wsp:val="009D197E"/><wsp:rsid wsp:val="00C2692F"/><wsp:rsid wsp:val="00D01553"/><wsp:rsid wsp:val="00DB5735"/><wsp:rsid wsp:val="00E2052D"/><wsp:rsid wsp:val="00F73BF3"/></wsp:rsids></w:docPr><w:body><wx:sect><w:p wsp:rsidR="00F73BF3" wsp:rsidRDefault="00F73BF3" wsp:rsidP="00F73BF3"><m:oMathPara><m:oMath><m:r><w:rPr><w:rFonts w:ascii="Cambria Math" w:h-ansi="Cambria Math"/><wx:font wx:val="Cambria Math"/><w:i/></w:rPr><m:t>
+</m:t></m:r></m:oMath></m:oMathPara></w:p><w:sectPr wsp:rsidR="00000000"><w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" w:header="720" w:footer="720" w:gutter="0"/><w:cols w:space="720"/></w:sectPr></wx:sect></w:body></w:wordDocument>
+IDAT(Sc
+IDATx^
+?vI{NB6
+$%fsy
+pT.-MFc%
+Ss"[J
+KX{j"
+W>b'c
+y17@uzv
+G/W:1V,
+3#!dk
+}~,dN
+>iDKKg
+U*\Cj=QgS
+c*Zo}
+#>:0c
+jRoue
+B[zoZ
+%R/0v
++h~9W
+\;7;u0
+UACUk
+-X[tc
+E7VNtz
+8m? }
+?-D[Q
+Kh8dG
+I|8i=#
+l2V'f
+RZOm`}n
+{rVN{7\
+pCx4_R~
+wgqT*
+oooOOO6E
+w8 xu
+===!(<
+Z.!uP
+-rE,?
+r50]IK
+3x@L`
+R9DZv
+s|CJq
+ASW8<g
+hXEJSC
+1|E/5
+t[Tkn
+^cC'wZ`
+XlcW9
+9:L?:
+<{)<m$
+%9R}K
+% Z,r
+-Z[t{
+r'>H>T
+`jLoC)W
+ocg8&
+z7{4Z
+M/,So
+cO% Mib
+KYd4(h
+gD"xd
+Kt-i/C
+cXF^&
+kn[yP
+>\/D0d/
+(j)p|
+B=V.Is
+AaYjU
+w+|j 
+K[}U/
+y*MCU
+'X\78
+wi0`g
+=:gaf
+II*F+
+II*F+
+4yIDATx^
+pt'1|
+1l:zH
+w[?2T
+mj%\w
+NQ`6A]
+]MX:tY
+NDc:;f
+88Z.c<
+iLm;i
+{r]~3
+fjk;Z
+Ho$&X
+}V)&U
+[WJl|
+[}'%^
+m:GB{E
+927#M
+yxxhiW
+D!*-]
+vwYtD
+;H1:W
+8jhP7z
+GF|rn
+a*6MM
+(}YJ:*6
+c#X$}
+#j<TP
+a:wv#
+C )`F
+`\42-
+,$eL?
+'\M3]=
+,;"VfJ
+q^+!V
+A|D( 
+T{d~.
+DyfSH}
+0]qAcm
+IVNuf`
+#rVFt
+.pWw|w
+!e@"1B
+SG23IS
+k1pmOu#
+M]$Og
+EkTBk
+a2'#-uY
+Nb2bHJ
+moi9[
+[~gg'L
+t/Nu:
+LKTKd*
+8u!33
+[Content_Types].xml
+_rels/.rels
+theme/theme/themeManager.xml
+theme/theme/theme1.xml
+d>zt7
+k):b|
+`dI+^
+DL-)>
+y@Q&Q
+$J}*;(
+6pp1GZ&
+YG4OPQR
+O**E~
+x%j.l)l
+theme/theme/_rels/themeManager.xml.rels
+K(M&$R(.1
+[Content_Types].xmlPK
+_rels/.relsPK
+theme/theme/themeManager.xmlPK
+theme/theme/theme1.xmlPK
+theme/theme/_rels/themeManager.xml.relsPK
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<a:clrMap xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" bg1="lt1" tx1="dk1" bg2="lt2" tx2="dk2" accent1="accent1" accent2="accent2" accent3="accent3" accent4="accent4" accent5="accent5" accent6="accent6" hlink="hlink" folHlink="folHlink"/>
+i].n#
+X,@lX}
+IEEE Transactions on Magnetics
+Lotito, Jessica M.
+ieeeconf_A4.dot
+Devang Kore
+Microsoft Office Word
+Title
+_PID_HLINKS
+TaxCatchAll
+lcf76f155ced4ddcb4097134ff3c332f
+<b:Sources SelectedStyle="\APA.XSL" StyleName="APA" xmlns:b="http://schemas.openxmlformats.org/officeDocument/2006/bibliography" xmlns="http://schemas.openxmlformats.org/officeDocument/2006/bibliography"></b:Sources>
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<ds:datastoreItem ds:itemID="{629F2921-E166-4FC4-9B2F-7FCEF1F9CA66}" xmlns:ds="http://schemas.openxmlformats.org/officeDocument/2006/customXml"><ds:schemaRefs><ds:schemaRef ds:uri="http://schemas.openxmlformats.org/officeDocument/2006/bibliography"/></ds:schemaRefs></ds:datastoreItem>
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<ds:datastoreItem ds:itemID="{DB590F32-B6E8-40CD-A1C9-3FBDA3DB25CC}" xmlns:ds="http://schemas.openxmlformats.org/officeDocument/2006/customXml"><ds:schemaRefs><ds:schemaRef ds:uri="http://schemas.microsoft.com/office/2006/metadata/contentType"/><ds:schemaRef ds:uri="http://schemas.microsoft.com/office/2006/metadata/properties/<?xml version="1.0" encoding="utf-8"?><ct:contentTypeSchema ct:_="" ma:_="" ma:contentTypeName="Dokument" ma:contentTypeID="0x0101008760CBEBE3EB3843B68F1F4BD2826F6D" ma:contentTypeVersion="15" ma:contentTypeDescription="Ein neues Dokument erstellen." ma:contentTypeScope="" ma:versionID="213da986ac6cd71239bba69fb5c22296" xmlns:ct="http://schemas.microsoft.com/office/2006/metadata/contentType" xmlns:ma="http://schemas.microsoft.com/office/2006/metadata/properties/metaAttributes">
+<xsd:schema targetNamespace="http://schemas.microsoft.com/office/2006/metadata/properties" ma:root="true" ma:fieldsID="d5102a7bbca29bd3cccdd60fbcac77f3" ns2:_="" ns3:_="" xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:p="http://schemas.microsoft.com/office/2006/metadata/properties" xmlns:ns2="f2ad5cf5-31f5-44f2-bd07-f9e5b9355c91" xmlns:ns3="bf8af7ae-5ba3-4915-b03d-21f9a5a234ce">
+<xsd:import namespace="f2ad5cf5-31f5-44f2-bd07-f9e5b9355c91"/>
+<xsd:import namespace="bf8af7ae-5ba3-4915-b03d-21f9a5a234ce"/>
+<xsd:element name="properties">
+<xsd:complexType>
+<xsd:sequence>
+<xsd:element name="documentManagement">
+<xsd:complexType>
+<xsd:all>
+<xsd:element ref="ns2:MediaServiceMetadata" minOccurs="0"/>
+<xsd:element ref="ns2:MediaServiceFastMetadata" minOccurs="0"/>
+<xsd:element ref="ns2:lcf76f155ced4ddcb4097134ff3c332f" minOccurs="0"/>
+<xsd:element ref="ns3:TaxCatchAll" minOccurs="0"/>
+<xsd:element ref="ns2:MediaServiceDateTaken" minOccurs="0"/>
+<xsd:element ref="ns2:MediaServiceLocation" minOccurs="0"/>
+<xsd:element ref="ns2:MediaServiceGenerationTime" minOccurs="0"/>
+<xsd:element ref="ns2:MediaServiceEventHashCode" minOccurs="0"/>
+<xsd:element ref="ns2:MediaServiceOCR" minOccurs="0"/>
+<xsd:element ref="ns2:MediaLengthInSeconds" minOccurs="0"/>
+<xsd:element ref="ns3:SharedWithUsers" minOccurs="0"/>
+<xsd:element ref="ns3:SharedWithDetails" minOccurs="0"/>
+<xsd:element ref="ns2:MediaServiceObjectDetectorVersions" minOccurs="0"/>
+<xsd:element ref="ns2:MediaServiceSearchProperties" minOccurs="0"/>
+</xsd:all>
+</xsd:complexType>
+</xsd:element>
+</xsd:sequence>
+</xsd:complexType>
+</xsd:element>
+</xsd:schema>
+<xsd:schema targetNamespace="f2ad5cf5-31f5-44f2-bd07-f9e5b9355c91" elementFormDefault="qualified" xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:dms="http://schemas.microsoft.com/office/2006/documentManagement/types" xmlns:pc="http://schemas.microsoft.com/office/infopath/2007/PartnerControls">
+<xsd:import namespace="http://schemas.microsoft.com/office/2006/documentManagement/types"/>
+<xsd:import namespace="http://schemas.microsoft.com/office/infopath/2007/PartnerControls"/>
+<xsd:element name="MediaServiceMetadata" ma:index="8" nillable="true" ma:displayName="MediaServiceMetadata" ma:hidden="true" ma:internalName="MediaServiceMetadata" ma:readOnly="true">
+<xsd:simpleType>
+<xsd:restriction base="dms:Note"/>
+</xsd:simpleType>
+</xsd:element>
+<xsd:element name="MediaServiceFastMetadata" ma:index="9" nillable="true" ma:displayName="MediaServiceFastMetadata" ma:hidden="true" ma:internalName="MediaServiceFastMetadata" ma:readOnly="true">
+<xsd:simpleType>
+<xsd:restriction base="dms:Note"/>
+</xsd:simpleType>
+</xsd:element>
+<xsd:element name="lcf76f155ced4ddcb4097134ff3c332f" ma:index="11" nillable="true" ma:taxonomy="true" ma:internalName="lcf76f155ced4ddcb4097134ff3c332f" ma:taxonomyFieldName="MediaServiceImageTags" ma:displayName="Bildmarkierungen" ma:readOnly="false" ma:fieldId="{5cf76f15-5ced-4ddc-b409-7134ff3c332f}" ma:taxonomyMulti="true" ma:sspId="4d4a4384-8771-4db4-a8b8-df0fba6cdf4c" ma:termSetId="09814cd3-568e-fe90-9814-8d621ff8fb84" ma:anchorId="fba54fb3-c3e1-fe81-a776-ca4b69148c4d" ma:open="true" ma:isKeyword="false">
+<xsd:complexType>
+<xsd:sequence>
+<xsd:element ref="pc:Terms" minOccurs="0" maxOccurs="1"></xsd:element>
+</xsd:sequence>
+</xsd:complexType>
+</xsd:element>
+<xsd:element name="MediaServiceDateTaken" ma:index="13" nillable="true" ma:displayName="MediaServiceDateTaken" ma:hidden="true" ma:indexed="true" ma:internalName="MediaServiceDateTaken" ma:readOnly="true">
+<xsd:simpleType>
+<xsd:restriction base="dms:Text"/>
+</xsd:simpleType>
+</xsd:element>
+<xsd:element name="MediaServiceLocation" ma:index="14" nillable="true" ma:displayName="Location" ma:indexed="true" ma:internalName="MediaServiceLocation" ma:readOnly="true">
+<xsd:simpleType>
+<xsd:restriction base="dms:Text"/>
+</xsd:simpleType>
+</xsd:element>
+<xsd:element name="MediaServiceGenerationTime" ma:index="15" nillable="true" ma:displayName="MediaServiceGenerationTime" ma:hidden="true" ma:internalName="MediaServiceGenerationTime" ma:readOnly="true">
+<xsd:simpleType>
+<xsd:restriction base="dms:Text"/>
+</xsd:simpleType>
+</xsd:element>
+<xsd:element name="MediaServiceEventHashCode" ma:index="16" nillable="true" ma:displayName="MediaServiceEventHashCode" ma:hidden="true" ma:internalName="MediaServiceEventHashCode" ma:readOnly="true">
+<xsd:simpleType>
+<xsd:restriction base="dms:Text"/>
+</xsd:simpleType>
+</xsd:element>
+<xsd:element name="MediaServiceOCR" ma:index="17" nillable="true" ma:displayName="Extracted Text" ma:internalName="MediaServiceOCR" ma:readOnly="true">
+<xsd:simpleType>
+<xsd:restriction base="dms:Note">
+<xsd:maxLength value="255"/>
+</xsd:restriction>
+</xsd:simpleType>
+</xsd:element>
+<xsd:element name="MediaLengthInSeconds" ma:index="18" nillable="true" ma:displayName="MediaLengthInSeconds" ma:hidden="true" ma:internalName="MediaLengthInSeconds" ma:readOnly="true">
+<xsd:simpleType>
+<xsd:restriction base="dms:Unknown"/>
+</xsd:simpleType>
+</xsd:element>
+<xsd:element name="MediaServiceObjectDetectorVersions" ma:index="21" nillable="true" ma:displayName="MediaServiceObjectDetectorVersions" ma:hidden="true" ma:indexed="true" ma:internalName="MediaServiceObjectDetectorVersions" ma:readOnly="true">
+<xsd:simpleType>
+<xsd:restriction base="dms:Text"/>
+</xsd:simpleType>
+</xsd:element>
+<xsd:element name="MediaServiceSearchProperties" ma:index="22" nillable="true" ma:displayName="MediaServiceSearchProperties" ma:hidden="true" ma:internalName="MediaServiceSearchProperties" ma:readOnly="true">
+<xsd:simpleType>
+<xsd:restriction base="dms:Note"/>
+</xsd:simpleType>
+</xsd:element>
+</xsd:schema>
+<xsd:schema targetNamespace="bf8af7ae-5ba3-4915-b03d-21f9a5a234ce" elementFormDefault="qualified" xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:dms="http://schemas.microsoft.com/office/2006/documentManagement/types" xmlns:pc="http://schemas.microsoft.com/office/infopath/2007/PartnerControls">
+<xsd:import namespace="http://schemas.microsoft.com/office/2006/documentManagement/types"/>
+<xsd:import namespace="http://schemas.microsoft.com/office/infopath/2007/PartnerControls"/>
+<xsd:element name="TaxCatchAll" ma:index="12" nillable="true" ma:displayName="Taxonomy Catch All Column" ma:hidden="true" ma:list="{ab746949-a28c-4e6c-bf83-7f7e03b9028e}" ma:internalName="TaxCatchAll" ma:showField="CatchAllData" ma:web="bf8af7ae-5ba3-4915-b03d-21f9a5a234ce">
+<xsd:complexType>
+<xsd:complexContent>
+<xsd:extension base="dms:MultiChoiceLookup">
+<xsd:sequence>
+<xsd:element name="Value" type="dms:Lookup" maxOccurs="unbounded" minOccurs="0" nillable="true"/>
+</xsd:sequence>
+</xsd:extension>
+</xsd:complexContent>
+</xsd:complexType>
+</xsd:element>
+<xsd:element name="SharedWithUsers" ma:index="19" nillable="true" ma:displayName="Freigegeben f
+r" ma:internalName="SharedWithUsers" ma:readOnly="true">
+<xsd:complexType>
+<xsd:complexContent>
+<xsd:extension base="dms:UserMulti">
+<xsd:sequence>
+<xsd:element name="UserInfo" minOccurs="0" maxOccurs="unbounded">
+<xsd:complexType>
+<xsd:sequence>
+<xsd:element name="DisplayName" type="xsd:string" minOccurs="0"/>
+<xsd:element name="AccountId" type="dms:UserId" minOccurs="0" nillable="true"/>
+<xsd:element name="AccountType" type="xsd:string" minOccurs="0"/>
+</xsd:sequence>
+</xsd:complexType>
+</xsd:element>
+</xsd:sequence>
+</xsd:extension>
+</xsd:complexContent>
+</xsd:complexType>
+</xsd:element>
+<xsd:element name="SharedWithDetails" ma:index="20" nillable="true" ma:displayName="Freigegeben f
+r - Details" ma:internalName="SharedWithDetails" ma:readOnly="true">
+<xsd:simpleType>
+<xsd:restriction base="dms:Note">
+<xsd:maxLength value="255"/>
+</xsd:restriction>
+</xsd:simpleType>
+</xsd:element>
+</xsd:schema>
+<xsd:schema targetNamespace="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" elementFormDefault="qualified" attributeFormDefault="unqualified" blockDefault="#all" xmlns="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/" xmlns:odoc="http://schemas.microsoft.com/internal/obd">
+<xsd:import namespace="http://purl.org/dc/elements/1.1/" schemaLocation="http://dublincore.org/schemas/xmls/qdc/2003/04/02/dc.xsd"/>
+<xsd:import namespace="http://purl.org/dc/terms/" schemaLocation="http://dublincore.org/schemas/xmls/qdc/2003/04/02/dcterms.xsd"/>
+<xsd:element name="coreProperties" type="CT_coreProperties"/>
+<xsd:complexType name="CT_coreProperties">
+<xsd:all>
+<xsd:element ref="dc:creator" minOccurs="0" maxOccurs="1"/>
+<xsd:element ref="dcterms:created" minOccurs="0" maxOccurs="1"/>
+<xsd:element ref="dc:identifier" minOccurs="0" maxOccurs="1"/>
+<xsd:element name="contentType" minOccurs="0" maxOccurs="1" type="xsd:string" ma:index="0" ma:displayName="Inhaltstyp"/>
+<xsd:element ref="dc:title" minOccurs="0" maxOccurs="1" ma:index="4" ma:displayName="Titel"/>
+<xsd:element ref="dc:subject" minOccurs="0" maxOccurs="1"/>
+<xsd:element ref="dc:description" minOccurs="0" maxOccurs="1"/>
+<xsd:element name="keywords" minOccurs="0" maxOccurs="1" type="xsd:string"/>
+<xsd:element ref="dc:language" minOccurs="0" maxOccurs="1"/>
+<xsd:element name="category" minOccurs="0" maxOccurs="1" type="xsd:string"/>
+<xsd:element name="version" minOccurs="0" maxOccurs="1" type="xsd:string"/>
+<xsd:element name="revision" minOccurs="0" maxOccurs="1" type="xsd:string">
+<xsd:annotation>
+<xsd:documentation>
+                        This value indicates the number of saves or revisions. The application is responsible for updating this value after each revision.
+                    </xsd:documentation>
+</xsd:annotation>
+</xsd:element>
+<xsd:element name="lastModifiedBy" minOccurs="0" maxOccurs="1" type="xsd:string"/>
+<xsd:element ref="dcterms:modified" minOccurs="0" maxOccurs="1"/>
+<xsd:element name="contentStatus" minOccurs="0" maxOccurs="1" type="xsd:string"/>
+</xsd:all>
+</xsd:complexType>
+</xsd:schema>
+<xs:schema targetNamespace="http://schemas.microsoft.com/office/infopath/2007/PartnerControls" elementFormDefault="qualified" attributeFormDefault="unqualified" xmlns:pc="http://schemas.microsoft.com/office/infopath/2007/PartnerControls" xmlns:xs="http://www.w3.org/2001/XMLSchema">
+<xs:element name="Person">
+<xs:complexType>
+<xs:sequence>
+<xs:element ref="pc:DisplayName" minOccurs="0"></xs:element>
+<xs:element ref="pc:AccountId" minOccurs="0"></xs:element>
+<xs:element ref="pc:AccountType" minOccurs="0"></xs:element>
+</xs:sequence>
+</xs:complexType>
+</xs:element>
+<xs:element name="DisplayName" type="xs:string"></xs:element>
+<xs:element name="AccountId" type="xs:string"></xs:element>
+<xs:element name="AccountType" type="xs:string"></xs:element>
+<xs:element name="BDCAssociatedEntity">
+<xs:complexType>
+<xs:sequence>
+<xs:element ref="pc:BDCEntity" minOccurs="0" maxOccurs="unbounded"></xs:element>
+</xs:sequence>
+<xs:attribute ref="pc:EntityNamespace"></xs:attribute>
+<xs:attribute ref="pc:EntityName"></xs:attribute>
+<xs:attribute ref="pc:SystemInstanceName"></xs:attribute>
+<xs:attribute ref="pc:AssociationName"></xs:attribute>
+</xs:complexType>
+</xs:element>
+<xs:attribute name="EntityNamespace" type="xs:string"></xs:attribute>
+<xs:attribute name="EntityName" type="xs:string"></xs:attribute>
+<xs:attribute name="SystemInstanceName" type="xs:string"></xs:attribute>
+<xs:attribute name="AssociationName" type="xs:string"></xs:attribute>
+<xs:element name="BDCEntity">
+<xs:complexType>
+<xs:sequence>
+<xs:element ref="pc:EntityDisplayName" minOccurs="0"></xs:element>
+<xs:element ref="pc:EntityInstanceReference" minOccurs="0"></xs:element>
+<xs:element ref="pc:EntityId1" minOccurs="0"></xs:element>
+<xs:element ref="pc:EntityId2" minOccurs="0"></xs:element>
+<xs:element ref="pc:EntityId3" minOccurs="0"></xs:element>
+<xs:element ref="pc:EntityId4" minOccurs="0"></xs:element>
+<xs:element ref="pc:EntityId5" minOccurs="0"></xs:element>
+</xs:sequence>
+</xs:complexType>
+</xs:element>
+<xs:element name="EntityDisplayName" type="xs:string"></xs:element>
+<xs:element name="EntityInstanceReference" type="xs:string"></xs:element>
+<xs:element name="EntityId1" type="xs:string"></xs:element>
+<xs:element name="EntityId2" type="xs:string"></xs:element>
+<xs:element name="EntityId3" type="xs:string"></xs:element>
+<xs:element name="EntityId4" type="xs:string"></xs:element>
+<xs:element name="EntityId5" type="xs:string"></xs:element>
+<xs:element name="Terms">
+<xs:complexType>
+<xs:sequence>
+<xs:element ref="pc:TermInfo" minOccurs="0" maxOccurs="unbounded"></xs:element>
+</xs:sequence>
+</xs:complexType>
+</xs:element>
+<xs:element name="TermInfo">
+<xs:complexType>
+<xs:sequence>
+<xs:element ref="pc:TermName" minOccurs="0"></xs:element>
+<xs:element ref="pc:TermId" minOccurs="0"></xs:element>
+</xs:sequence>
+</xs:complexType>
+</xs:element>
+<xs:element name="TermName" type="xs:string"></xs:element>
+<xs:element name="TermId" type="xs:string"></xs:element>
+</xs:schema>
+</ct:contentTypeSchema>
+metaAttributes"/><ds:schemaRef ds:uri="http://www.w3.org/2001/XMLSchema"/><ds:schemaRef ds:uri="http://schemas.microsoft.com/office/2006/metadata/properties"/><ds:schemaRef ds:uri="f2ad5cf5-31f5-44f2-bd07-f9e5b9355c91"/><ds:schemaRef ds:uri="bf8af7ae-5ba3-4915-b03d-21f9a5a234ce"/><ds:schemaRef ds:uri="http://schemas.microsoft.com/office/2006/documentManagement/types"/><ds:schemaRef ds:uri="http://schemas.microsoft.com/office/infopath/2007/PartnerControls"/><ds:schemaRef ds:uri="http://schemas.openxmlformats.org/package/2006/metadata/core-properties"/><ds:schemaRef ds:uri="http://purl.org/dc/elements/1.1/"/><ds:schemaRef ds:uri="http://purl.org/dc/terms/"/><ds:schemaRef ds:uri="http://schemas.microsoft.com/internal/obd"/></ds:schemaRefs></ds:datastoreItem>
+<?mso-contentType?><FormTemplates xmlns="http://schemas.microsoft.com/sharepoint/v3/contenttype/forms"><Display>DocumentLibraryForm</Display><Edit>DocumentLibraryForm</Edit><New>DocumentLibraryForm</New></FormTemplates>
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<ds:datastoreItem ds:itemID="{064D0EE7-A318-40B0-A1EB-B4831C504082}" xmlns:ds="http://schemas.openxmlformats.org/officeDocument/2006/customXml"><ds:schemaRefs><ds:schemaRef ds:uri="http://schemas.microsoft.com/sharepoint/v3/contenttype/forms"/></ds:schemaRefs></ds:datastoreItem>
+Microsoft Word 97-2003 Document
+MSWordDoc
+Word.Document.8
