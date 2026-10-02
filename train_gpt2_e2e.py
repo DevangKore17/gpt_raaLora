@@ -17,6 +17,7 @@ from transformers import GPT2LMHeadModel, GPT2Tokenizer, get_linear_schedule_wit
 from datasets import load_dataset
 from torch.utils.data import DataLoader
 import numpy as np
+from tqdm import tqdm
 
 from router import RaaLoRARouter
 from RaaLoRA_GPT2 import RaaLoRA_GPT2_c_attn
@@ -159,7 +160,7 @@ def main(seed=42):
         router.train()
         train_loss = 0
         
-        for batch in train_dataloader:
+        for batch in tqdm(train_dataloader, desc=f"Epoch {epoch+1}/{EPOCHS} [Train]"):
             input_ids = batch['input_ids'].to(device)
             attention_mask = batch['attention_mask'].to(device)
             labels = batch['labels'].to(device)
@@ -204,7 +205,7 @@ def main(seed=42):
         model.eval()
         val_loss = 0
         with torch.no_grad():
-            for batch in val_dataloader:
+            for batch in tqdm(val_dataloader, desc=f"Epoch {epoch+1}/{EPOCHS} [Val]", leave=False):
                 input_ids = batch['input_ids'].to(device)
                 attention_mask = batch['attention_mask'].to(device)
                 labels = batch['labels'].to(device)
