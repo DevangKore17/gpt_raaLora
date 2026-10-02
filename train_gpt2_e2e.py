@@ -243,37 +243,89 @@ def main(seed=42):
     prune_gpt2_layers(final_routing_matrix, lora_layers, threshold=TARGET_BUDGET)
     
     # ============================================================
-    # INFERENCE EVALUATION (TEST SET)
+    # INFERENCE & EVALUATION (E2E Benchmark)
     # ============================================================
-    print("\nStarting Inference with Beam Search (size=10, len_penalty=0.9, ngram=4)...")
+    print("\n" + "="*60)
+    print("Starting E2E Benchmark Evaluation...")
+    print("="*60)
     model.eval()
+
+    # 1. Effective Average Rank
+    avg_rank = sum(layer.R_max for layer in lora_layers) / len(lora_layers)
+    print(f"\n[Adaptive Routing Benchmark] Effective Average Rank: {avg_rank:.2f} (Baseline LoRA = 4.0)")
+
+    # 2. Generation & Inference Overhead
+    print("\nGenerating predictions on test set (Beam=10, Len_Pen=0.9, No_Rep_Ngram=4)...")
     
-    # We test on one batch just to demonstrate
-    test_batch = next(iter(test_dataloader))
-    input_ids = test_batch['input_ids'][:2].to(device)
+    import time
+    total_generated_tokens = 0
+    total_generation_time = 0.0
     
-    # At inference, router scale is strictly 1.0 for all retained dimensions
-    for layer in lora_layers:
-        layer.current_scale = torch.ones(input_ids.size(0), layer.R_max).to(device)
+    predictions = []
+    # E2E test set can be large; you can subset this for quick testing if needed
+    for i, batch in enumerate(test_dataloader):
+        input_ids = batch['input_ids'].to(device)
         
-    # Isolate just the meaning representation prompt
-    # E.g., we want everything up to "=>"
-    # For a real pipeline you would process strings, but we'll let HF generate from raw input
-    generated = model.generate(
-        input_ids,
-        max_new_tokens=50,
-        num_beams=10,
-        length_penalty=0.9,
-        no_repeat_ngram_size=4,
-        pad_token_id=tokenizer.eos_token_id
-    )
-    
-    for i, gen in enumerate(generated):
-        print(f"\n--- Output {i+1} ---")
-        print(tokenizer.decode(gen, skip_special_tokens=True))
+        # We only want the prompt (meaning representation). 
+        # For HF E2E dataset, we must extract the prompt up to " => " manually,
+        # but since we already tokenized with padding, the input_ids contain the gold response.
+        # To strictly do inference, we should tokenize JUST the prompts.
+        # We do it dynamically here for the benchmark:
+        prompts = [tokenizer.decode(ids, skip_special_tokens=True).split(" => ")[0] + " => " for ids in input_ids]
+        prompt_encodings = tokenizer(prompts, return_tensors="pt", padding=True).to(device)
         
+        for layer in lora_layers:
+            layer.current_scale = torch.ones(prompt_encodings.input_ids.size(0), layer.R_max).to(device)
+            
+        start_time = time.time()
+        
+        generated_ids = model.generate(
+            prompt_encodings.input_ids,
+            attention_mask=prompt_encodings.attention_mask,
+            max_new_tokens=60,
+            num_beams=10,
+            length_penalty=0.9,
+            no_repeat_ngram_size=4,
+            pad_token_id=tokenizer.eos_token_id
+        )
+        
+        end_time = time.time()
+        
+        # Calculate tokens generated and latency
+        new_tokens = generated_ids.shape[1] - prompt_encodings.input_ids.shape[1]
+        total_generated_tokens += (new_tokens * generated_ids.shape[0])
+        total_generation_time += (end_time - start_time)
+        
+        # Decode and store
+        for gen_ids, prompt_len in zip(generated_ids, prompt_encodings.input_ids.shape):
+            # Only keep the newly generated text
+            pred_text = tokenizer.decode(gen_ids[prompt_len:], skip_special_tokens=True)
+            predictions.append(pred_text.strip().replace("\n", " "))
+            
+        if (i+1) % 10 == 0:
+            print(f"  Processed {i+1}/{len(test_dataloader)} batches...")
+
+    # Print Latency Overhead
+    ms_per_token = (total_generation_time / total_generated_tokens) * 1000
+    print(f"\n[Adaptive Routing Benchmark] Inference Overhead:")
+    print(f"  Latency: {ms_per_token:.2f} ms per token")
+
+    # 3. Save Predictions for Official e2e-metrics script
+    pred_path = "e2e_predictions.txt"
+    with open(pred_path, "w", encoding="utf-8") as f:
+        f.write("\n".join(predictions))
+        
+    print(f"\nPredictions saved to {pred_path}")
+    print("\nTo calculate BLEU, NIST, METEOR, ROUGE-L, and CIDEr:")
+    print("  1. Clone the official script: git clone https://github.com/tuetschek/e2e-metrics")
+    print("  2. Format the gold references from the dataset.")
+    print("  3. Run: ./e2e-metrics/measure_scores.py gold_references.txt e2e_predictions.txt")
+    print("="*60)
+
 if __name__ == "__main__":
+    import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument("--seed", type=int, default=42, help="Random seed (benchmark requires 3)")
     args = parser.parse_args()
     main(args.seed)
+
