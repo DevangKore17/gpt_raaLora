@@ -111,7 +111,7 @@ def main(seed=42):
     # DATASET PREP (e2e_nlg)
     # ============================================================
     print("\nLoading e2e_nlg dataset...")
-    dataset = load_dataset("e2e_nlg")
+    dataset = load_dataset("e2e_nlg", trust_remote_code=True)
     
     def tokenize_function(examples):
         # E2E format: meaning representation -> human readable text
