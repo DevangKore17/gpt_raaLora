@@ -132,7 +132,7 @@ print(f"\nTotal RaaLoRA layers swapped: {num_lora_layers}")
 d_model = model.config.hidden_size    # 2048 for LLaMA-1B
 
 router = RaaLoRARouter(
-    d_model=d_model,
+    d_module=d_model,
     num_layers=num_lora_layers,
     r_max=R_MAX,
     bottleneck_dim=BOTTLENECK_DIM

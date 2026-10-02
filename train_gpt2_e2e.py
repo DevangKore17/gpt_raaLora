@@ -102,7 +102,7 @@ def main(seed=42):
         layer_names.append(name)
         
     d_model = model.config.n_embd
-    router = RaaLoRARouter(d_model=d_model, num_layers=len(lora_layers), r_max=R_MAX, bottleneck_dim=256)
+    router = RaaLoRARouter(d_module=d_model, num_layers=len(lora_layers), r_max=R_MAX, bottleneck_dim=256)
     
     model.to(device)
     router.to(device)
