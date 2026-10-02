@@ -15,6 +15,7 @@ def prune_layers(ema_matrix, layers, threshold=0.5):
     for i, layer in enumerate(layers):
             # 1. Count the 1s in this layer's row → new rank
             new_rank = binary_mask[i].sum().item()
+            new_rank = max(1, int(new_rank)) # prevent division by zero in forward pass
 
             # 2. Slice MatA: keep first new_rank columns
             #    layer.MatA.data has shape (in_features, r_max)
