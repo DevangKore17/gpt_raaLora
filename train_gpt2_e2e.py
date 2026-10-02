@@ -38,7 +38,9 @@ def main(seed=42, use_tpu=False):
 
     if USE_TPU:
         import torch_xla.core.xla_model as xm
-        device = xm.xla_device()
+        import torch_xla.distributed.parallel_loader as pl
+        import torch_xla
+        device = torch_xla.device()
     else:
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Device: {device}")
@@ -158,10 +160,9 @@ def main(seed=42, use_tpu=False):
     for epoch in range(EPOCHS):
         model.train()
         router.train()
-        train_loss_tensor = torch.tensor(0.0, device=device)
+        train_loss = 0.0
         
         if USE_TPU:
-            import torch_xla.distributed.parallel_loader as pl
             epoch_iterator = pl.ParallelLoader(train_dataloader, [device]).per_device_loader(device)
         else:
             epoch_iterator = train_dataloader
@@ -204,14 +205,12 @@ def main(seed=42, use_tpu=False):
             scheduler.step()
             
             ema_tracker.update(torch.mean(routing_matrix, dim=0))
-            train_loss_tensor += task_loss.detach()
+            train_loss += task_loss.item()
             global_step += 1
-            
-        train_loss = train_loss_tensor.item()
             
         # Validation
         model.eval()
-        val_loss_tensor = torch.tensor(0.0, device=device)
+        val_loss = 0.0
         
         if USE_TPU:
             val_epoch_iterator = pl.ParallelLoader(val_dataloader, [device]).per_device_loader(device)
@@ -232,9 +231,7 @@ def main(seed=42, use_tpu=False):
                 outputs = model(input_ids=input_ids, attention_mask=attention_mask)
                 shift_logits = outputs.logits[..., :-1, :].contiguous()
                 shift_labels = labels[..., 1:].contiguous()
-                val_loss_tensor += loss_fn(shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1))
-                
-        val_loss = val_loss_tensor.item()
+                val_loss += loss_fn(shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1)).item()
         avg_val = val_loss / len(val_dataloader)
         print(f"Epoch {epoch+1} | Train Loss: {train_loss/len(train_dataloader):.4f} | Val Loss: {avg_val:.4f}")
         
@@ -257,6 +254,10 @@ def main(seed=42, use_tpu=False):
         
     final_routing_matrix = best_model_state['ema'].to(device)
     prune_gpt2_layers(final_routing_matrix, lora_layers, threshold=TARGET_BUDGET)
+    
+    save_path = "gpt2_raa_lora_best.pt"
+    print(f"\nSaving best model weights to {save_path}...")
+    torch.save(best_model_state, save_path)
     
     # ============================================================
     # INFERENCE & EVALUATION (E2E Benchmark)
@@ -288,7 +289,7 @@ def main(seed=42, use_tpu=False):
         # To strictly do inference, we should tokenize JUST the prompts.
         # We do it dynamically here for the benchmark:
         prompts = [tokenizer.decode(ids, skip_special_tokens=True).split(" => ")[0] + " => " for ids in input_ids]
-        prompt_encodings = tokenizer(prompts, return_tensors="pt", padding=True).to(device)
+        prompt_encodings = tokenizer(prompts, return_tensors="pt", padding="max_length", max_length=64, truncation=True).to(device)
         
         for layer in lora_layers:
             layer.current_scale = torch.ones(prompt_encodings.input_ids.size(0), layer.R_max).to(device)
@@ -313,7 +314,8 @@ def main(seed=42, use_tpu=False):
         total_generation_time += (end_time - start_time)
         
         # Decode and store
-        for gen_ids, prompt_len in zip(generated_ids, prompt_encodings.input_ids.shape):
+        prompt_len = prompt_encodings.input_ids.shape[1]
+        for gen_ids in generated_ids:
             # Only keep the newly generated text
             pred_text = tokenizer.decode(gen_ids[prompt_len:], skip_special_tokens=True)
             predictions.append(pred_text.strip().replace("\n", " "))
