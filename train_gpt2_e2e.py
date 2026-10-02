@@ -161,6 +161,7 @@ def main(seed=42, use_tpu=False):
         model.train()
         router.train()
         train_loss = 0.0
+        pending_loss = torch.tensor(0.0, device=device)
         
         if USE_TPU:
             epoch_iterator = pl.ParallelLoader(train_dataloader, [device]).per_device_loader(device)
@@ -205,8 +206,13 @@ def main(seed=42, use_tpu=False):
             scheduler.step()
             
             ema_tracker.update(torch.mean(routing_matrix, dim=0))
-            train_loss += task_loss.item()
+            pending_loss += task_loss.detach()
+            if global_step % 50 == 0:
+                train_loss += pending_loss.item()
+                pending_loss = torch.tensor(0.0, device=device)
             global_step += 1
+            
+        train_loss += pending_loss.item()
             
         # Validation
         model.eval()
