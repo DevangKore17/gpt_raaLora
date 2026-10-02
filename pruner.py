@@ -13,25 +13,19 @@ def prune_layers(ema_matrix, layers, threshold=0.5):
     binary_mask = (ema_matrix >= threshold).int()
 
     for i, layer in enumerate(layers):
-            # 1. Count the 1s in this layer's row → new rank
-            new_rank = binary_mask[i].sum().item()
-            new_rank = max(1, int(new_rank)) # prevent division by zero in forward pass
-
-            # 2. Slice MatA: keep first new_rank columns
-            #    layer.MatA.data has shape (in_features, r_max)
-            #    We want (in_features, new_rank)
-            new_A_data = layer.MatA.data[:, :new_rank]    # All rows, first new_rank columns
-        # First new_rank rows, all columns
-
-    
-            # 3. Slice MatB: keep first new_rank rows
-            new_B_data = layer.MatB.data[:new_rank, :]
-            #    layer.MatB.data has shape (r_max, out_features)
-            #    We want (new_rank, out_features)
-
-            # 4. Replace them with new Parameters
-            layer.MatA = Parameter(new_A_data.clone())
-            layer.MatB = Parameter(new_B_data.clone())
+        keep_indices = torch.nonzero(binary_mask[i]).squeeze(-1)
+        if len(keep_indices) == 0:
+            keep_indices = torch.tensor([0], device=ema_matrix.device)
             
-            # 5. Update layer.R_max = new_rank
-            layer.R_max = new_rank
+        new_rank = len(keep_indices)
+
+        # 2. Slice MatA and MatB using exact keep_indices
+        new_A_data = layer.MatA.data[:, keep_indices]
+        new_B_data = layer.MatB.data[keep_indices, :]
+
+        # 3. Replace them with new Parameters
+        layer.MatA = Parameter(new_A_data.clone())
+        layer.MatB = Parameter(new_B_data.clone())
+        
+        # 4. Update layer.R_max = new_rank
+        layer.R_max = new_rank
