@@ -158,9 +158,15 @@ def main(seed=42, use_tpu=False):
     for epoch in range(EPOCHS):
         model.train()
         router.train()
-        train_loss = 0
+        train_loss_tensor = torch.tensor(0.0, device=device)
         
-        for batch in tqdm(train_dataloader, desc=f"Epoch {epoch+1}/{EPOCHS} [Train]"):
+        if USE_TPU:
+            import torch_xla.distributed.parallel_loader as pl
+            epoch_iterator = pl.ParallelLoader(train_dataloader, [device]).per_device_loader(device)
+        else:
+            epoch_iterator = train_dataloader
+            
+        for batch in tqdm(epoch_iterator, desc=f"Epoch {epoch+1}/{EPOCHS} [Train]"):
             input_ids = batch['input_ids'].to(device)
             attention_mask = batch['attention_mask'].to(device)
             labels = batch['labels'].to(device)
@@ -191,21 +197,29 @@ def main(seed=42, use_tpu=False):
             torch.nn.utils.clip_grad_norm_(lora_params + list(router.parameters()), 1.0)
             
             if USE_TPU:
-                xm.optimizer_step(optimizer)
+                xm.optimizer_step(optimizer, barrier=True)
             else:
                 optimizer.step()
                 
             scheduler.step()
             
             ema_tracker.update(torch.mean(routing_matrix, dim=0))
-            train_loss += task_loss.item()
+            train_loss_tensor += task_loss.detach()
             global_step += 1
+            
+        train_loss = train_loss_tensor.item()
             
         # Validation
         model.eval()
-        val_loss = 0
+        val_loss_tensor = torch.tensor(0.0, device=device)
+        
+        if USE_TPU:
+            val_epoch_iterator = pl.ParallelLoader(val_dataloader, [device]).per_device_loader(device)
+        else:
+            val_epoch_iterator = val_dataloader
+            
         with torch.no_grad():
-            for batch in tqdm(val_dataloader, desc=f"Epoch {epoch+1}/{EPOCHS} [Val]", leave=False):
+            for batch in tqdm(val_epoch_iterator, desc=f"Epoch {epoch+1}/{EPOCHS} [Val]", leave=False):
                 input_ids = batch['input_ids'].to(device)
                 attention_mask = batch['attention_mask'].to(device)
                 labels = batch['labels'].to(device)
@@ -218,8 +232,9 @@ def main(seed=42, use_tpu=False):
                 outputs = model(input_ids=input_ids, attention_mask=attention_mask)
                 shift_logits = outputs.logits[..., :-1, :].contiguous()
                 shift_labels = labels[..., 1:].contiguous()
-                val_loss += loss_fn(shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1)).item()
+                val_loss_tensor += loss_fn(shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1))
                 
+        val_loss = val_loss_tensor.item()
         avg_val = val_loss / len(val_dataloader)
         print(f"Epoch {epoch+1} | Train Loss: {train_loss/len(train_dataloader):.4f} | Val Loss: {avg_val:.4f}")
         
