@@ -182,7 +182,7 @@ def main(seed=42, use_tpu=False, inference_only=False):
             with torch.no_grad():
                 embeddings = model.transformer.wte(input_ids)
                 
-            routing_matrix = router(embeddings)
+            routing_matrix = router(embeddings, attention_mask=attention_mask)
             for layer_idx, layer in enumerate(lora_layers):
                 layer.current_scale = routing_matrix[:, layer_idx, :]
                 
@@ -236,7 +236,7 @@ def main(seed=42, use_tpu=False, inference_only=False):
                 labels = batch['labels'].to(device)
                 
                 embeddings = model.transformer.wte(input_ids)
-                routing_matrix = router(embeddings)
+                routing_matrix = router(embeddings, attention_mask=attention_mask)
                 for layer_idx, layer in enumerate(lora_layers):
                     layer.current_scale = routing_matrix[:, layer_idx, :]
                     
@@ -302,7 +302,7 @@ def main(seed=42, use_tpu=False, inference_only=False):
         # We do it dynamically here for the benchmark:
         prompts = [tokenizer.decode(ids, skip_special_tokens=True).split(" => ")[0] + " => " for ids in input_ids]
         tokenizer.padding_side = "left"
-        prompt_encodings = tokenizer(prompts, return_tensors="pt", padding="max_length", max_length=64, truncation=True).to(device)
+        prompt_encodings = tokenizer(prompts, return_tensors="pt", padding="max_length", max_length=128, truncation=True).to(device)
         
         num_beams = 10
         for layer in lora_layers:

@@ -13,8 +13,12 @@ class RaaLoRARouter(Module):
         self.upstream= Linear(bottleneck_dim,num_layers * r_max)
     
         
-    def forward(self,x):
-        input1= torch.mean(x,dim=1)
+    def forward(self, x, attention_mask=None):
+        if attention_mask is not None:
+            mask_expanded = attention_mask.unsqueeze(-1).expand(x.size()).float()
+            input1 = torch.sum(x * mask_expanded, dim=1) / torch.clamp(mask_expanded.sum(dim=1), min=1e-9)
+        else:
+            input1 = torch.mean(x, dim=1)
         h=self.downstream(input1)
         h=torch.relu(h)
         out=self.upstream(h)

@@ -17,12 +17,14 @@ def prune_layers(ema_matrix, layers, threshold=0.5):
         if len(keep_indices) == 0:
             keep_indices = torch.tensor([0], device=ema_matrix.device)
             
+        old_rank = layer.R_max
         new_rank = len(keep_indices)
         keep_scales = ema_matrix[i, keep_indices]
 
-        # 2. Slice MatA and MatB using exact keep_indices and absorb scales
+        # 2. Slice MatA and MatB using exact keep_indices, absorb scales, and fix alpha/R scaling
+        scale_correction = new_rank / old_rank
         new_A_data = layer.MatA.data[:, keep_indices]
-        new_B_data = layer.MatB.data[keep_indices, :] * keep_scales.unsqueeze(1)
+        new_B_data = layer.MatB.data[keep_indices, :] * keep_scales.unsqueeze(1) * scale_correction
 
         # 3. Replace them with new Parameters
         layer.MatA = Parameter(new_A_data.clone())
