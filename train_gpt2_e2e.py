@@ -110,12 +110,12 @@ def main(seed=42):
     # ============================================================
     # DATASET PREP (e2e_nlg)
     # ============================================================
-    print("\nLoading e2e_nlg dataset...")
-    dataset = load_dataset("e2e_nlg", trust_remote_code=True)
+    print("\nLoading GEM/e2e_nlg dataset (Parquet version)...")
+    dataset = load_dataset("GEM/e2e_nlg")
     
     def tokenize_function(examples):
         # E2E format: meaning representation -> human readable text
-        prompts = [f"{mr} => {txt}{tokenizer.eos_token}" for mr, txt in zip(examples['meaning_representation'], examples['human_reference'])]
+        prompts = [f"{mr} => {txt}{tokenizer.eos_token}" for mr, txt in zip(examples['meaning_representation'], examples['target'])]
         encodings = tokenizer(prompts, truncation=True, max_length=256, padding="max_length")
         
         labels = []
