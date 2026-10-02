@@ -30,7 +30,7 @@ def set_seed(seed):
     torch.cuda.manual_seed_all(seed)
     np.random.seed(seed)
 
-def main(seed=42, use_tpu=False):
+def main(seed=42, use_tpu=False, inference_only=False):
     set_seed(seed)
     print(f"\n{'='*60}\nStarting GPT-2 E2E Baseline (Seed {seed})\n{'='*60}")
     
@@ -155,9 +155,15 @@ def main(seed=42, use_tpu=False):
     best_val_loss = float('inf')
     best_model_state = None
     
-    print("\nStarting Training...")
+    save_path = "gpt2_raa_lora_best.pt"
+    if inference_only:
+        print(f"\nSkipping training. Loading weights from {save_path}...")
+        best_model_state = torch.load(save_path, map_location="cpu")
+    else:
+        print("\nStarting Training...")
+        
     global_step = 0
-    for epoch in range(EPOCHS):
+    for epoch in (range(EPOCHS) if not inference_only else []):
         model.train()
         router.train()
         train_loss = 0.0
@@ -261,9 +267,9 @@ def main(seed=42, use_tpu=False):
     final_routing_matrix = best_model_state['ema'].to(device)
     prune_gpt2_layers(final_routing_matrix, lora_layers, threshold=TARGET_BUDGET)
     
-    save_path = "gpt2_raa_lora_best.pt"
-    print(f"\nSaving best model weights to {save_path}...")
-    torch.save(best_model_state, save_path)
+    if not inference_only:
+        print(f"\nSaving best model weights to {save_path}...")
+        torch.save(best_model_state, save_path)
     
     # ============================================================
     # INFERENCE & EVALUATION (E2E Benchmark)
@@ -295,6 +301,7 @@ def main(seed=42, use_tpu=False):
         # To strictly do inference, we should tokenize JUST the prompts.
         # We do it dynamically here for the benchmark:
         prompts = [tokenizer.decode(ids, skip_special_tokens=True).split(" => ")[0] + " => " for ids in input_ids]
+        tokenizer.padding_side = "left"
         prompt_encodings = tokenizer(prompts, return_tensors="pt", padding="max_length", max_length=64, truncation=True).to(device)
         
         for layer in lora_layers:
@@ -351,6 +358,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--seed", type=int, default=42, help="Random seed (benchmark requires 3)")
     parser.add_argument("--use_tpu", action="store_true", help="Set this flag to use TPU via PyTorch XLA")
+    parser.add_argument("--inference_only", action="store_true", help="Skip training and run inference using gpt2_raa_lora_best.pt")
     args = parser.parse_args()
-    main(args.seed, args.use_tpu)
+    main(args.seed, args.use_tpu, args.inference_only)
 
