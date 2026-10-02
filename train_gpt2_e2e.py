@@ -304,8 +304,9 @@ def main(seed=42, use_tpu=False, inference_only=False):
         tokenizer.padding_side = "left"
         prompt_encodings = tokenizer(prompts, return_tensors="pt", padding="max_length", max_length=64, truncation=True).to(device)
         
+        num_beams = 10
         for layer in lora_layers:
-            layer.current_scale = torch.ones(prompt_encodings.input_ids.size(0), layer.R_max).to(device)
+            layer.current_scale = torch.ones(prompt_encodings.input_ids.size(0) * num_beams, layer.R_max).to(device)
             
         start_time = time.time()
         
@@ -313,7 +314,7 @@ def main(seed=42, use_tpu=False, inference_only=False):
             prompt_encodings.input_ids,
             attention_mask=prompt_encodings.attention_mask,
             max_new_tokens=60,
-            num_beams=10,
+            num_beams=num_beams,
             length_penalty=0.9,
             no_repeat_ngram_size=4,
             pad_token_id=tokenizer.eos_token_id
