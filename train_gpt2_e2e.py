@@ -30,11 +30,11 @@ def set_seed(seed):
     torch.cuda.manual_seed_all(seed)
     np.random.seed(seed)
 
-def main(seed=42):
+def main(seed=42, use_tpu=False):
     set_seed(seed)
     print(f"\n{'='*60}\nStarting GPT-2 E2E Baseline (Seed {seed})\n{'='*60}")
     
-    USE_TPU = False
+    USE_TPU = use_tpu
 
     if USE_TPU:
         import torch_xla.core.xla_model as xm
@@ -327,6 +327,7 @@ if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument("--seed", type=int, default=42, help="Random seed (benchmark requires 3)")
+    parser.add_argument("--use_tpu", action="store_true", help="Set this flag to use TPU via PyTorch XLA")
     args = parser.parse_args()
-    main(args.seed)
+    main(args.seed, args.use_tpu)
 
