@@ -267,9 +267,113 @@ def main(seed=42, use_tpu=False, inference_only=False):
     final_routing_matrix = best_model_state['ema'].to(device)
     prune_gpt2_layers(final_routing_matrix, lora_layers, threshold=TARGET_BUDGET)
     
+    # ============================================================
+    # STAGE 4: POLISH RUN (Post-Pruning Recovery)
+    # ============================================================
+    # After hard pruning, the model needs a short retraining phase to
+    # recover from "pruning shock". We train for 1 epoch with:
+    #   - No router (fixed scale = 1.0, since scales are baked into MatB)
+    #   - No budget penalty (pruning is already done)
+    #   - A gentle learning rate (1e-4)
+    #   - Standard LoRA fine-tuning on the heterogeneous ranks
+    # ============================================================
+    POLISH_EPOCHS = 1
+    POLISH_LR = 1e-4
+    
     if not inference_only:
-        print(f"\nSaving best model weights to {save_path}...")
-        torch.save(best_model_state, save_path)
+        print(f"\n{'='*60}")
+        print(f"Starting Stage 4: Polish Run ({POLISH_EPOCHS} epoch @ lr={POLISH_LR})")
+        print(f"{'='*60}")
+        
+        # New optimizer for only the pruned LoRA params (router is discarded)
+        polish_params = [p for p in model.parameters() if p.requires_grad]
+        polish_optimizer = torch.optim.AdamW(polish_params, lr=POLISH_LR, weight_decay=WEIGHT_DECAY)
+        polish_steps = len(train_dataloader) * POLISH_EPOCHS
+        polish_scheduler = get_linear_schedule_with_warmup(
+            polish_optimizer, num_warmup_steps=0, num_training_steps=polish_steps
+        )
+        
+        for polish_epoch in range(POLISH_EPOCHS):
+            model.train()
+            polish_train_loss = 0.0
+            num_batches = 0
+            
+            if USE_TPU:
+                polish_iterator = pl.ParallelLoader(train_dataloader, [device]).per_device_loader(device)
+            else:
+                polish_iterator = train_dataloader
+                
+            for batch in tqdm(polish_iterator, desc=f"Polish Epoch {polish_epoch+1}/{POLISH_EPOCHS}"):
+                input_ids = batch['input_ids'].to(device)
+                attention_mask = batch['attention_mask'].to(device)
+                labels = batch['labels'].to(device)
+                
+                # Fixed scale = 1.0 (no router). The EMA scales are already
+                # baked into MatB by the pruner, so 1.0 is correct here.
+                for layer in lora_layers:
+                    layer.current_scale = torch.ones(input_ids.size(0), layer.R_max, device=device)
+                
+                outputs = model(input_ids=input_ids, attention_mask=attention_mask)
+                logits = outputs.logits
+                
+                shift_logits = logits[..., :-1, :].contiguous()
+                shift_labels = labels[..., 1:].contiguous()
+                task_loss = loss_fn(shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1))
+                
+                polish_optimizer.zero_grad()
+                task_loss.backward()
+                torch.nn.utils.clip_grad_norm_(polish_params, 1.0)
+                
+                if USE_TPU:
+                    xm.optimizer_step(polish_optimizer, barrier=True)
+                else:
+                    polish_optimizer.step()
+                    
+                polish_scheduler.step()
+                polish_train_loss += task_loss.item()
+                num_batches += 1
+            
+            avg_polish_loss = polish_train_loss / num_batches
+            
+            # Validate after polish
+            model.eval()
+            polish_val_loss = 0.0
+            
+            if USE_TPU:
+                polish_val_iterator = pl.ParallelLoader(val_dataloader, [device]).per_device_loader(device)
+            else:
+                polish_val_iterator = val_dataloader
+                
+            with torch.no_grad():
+                for batch in tqdm(polish_val_iterator, desc=f"Polish Epoch {polish_epoch+1}/{POLISH_EPOCHS} [Val]", leave=False):
+                    input_ids = batch['input_ids'].to(device)
+                    attention_mask = batch['attention_mask'].to(device)
+                    labels = batch['labels'].to(device)
+                    
+                    for layer in lora_layers:
+                        layer.current_scale = torch.ones(input_ids.size(0), layer.R_max, device=device)
+                    
+                    outputs = model(input_ids=input_ids, attention_mask=attention_mask)
+                    shift_logits = outputs.logits[..., :-1, :].contiguous()
+                    shift_labels = labels[..., 1:].contiguous()
+                    polish_val_loss += loss_fn(shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1)).item()
+            
+            avg_polish_val = polish_val_loss / len(val_dataloader)
+            print(f"Polish Epoch {polish_epoch+1} | Train Loss: {avg_polish_loss:.4f} | Val Loss: {avg_polish_val:.4f}")
+        
+        print("Polish run complete!")
+    
+    if not inference_only:
+        print(f"\nSaving polished model weights to {save_path}...")
+        # Save the polished state (pruned + recovered weights)
+        polished_state = {
+            'model': {n: p.cpu().clone() for n, p in model.named_parameters() if p.requires_grad},
+            'router': {n: p.cpu().clone() for n, p in router.named_parameters()},
+            'ema': best_model_state['ema'].cpu().clone(),
+            'pruning_complete': True,
+            'polish_complete': True,
+        }
+        torch.save(polished_state, save_path)
     
     # ============================================================
     # INFERENCE & EVALUATION (E2E Benchmark)
