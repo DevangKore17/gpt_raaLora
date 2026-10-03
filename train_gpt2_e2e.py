@@ -277,7 +277,7 @@ def main(seed=42, use_tpu=False, inference_only=False, polish=False):
     #   - A gentle learning rate (1e-4)
     #   - Standard LoRA fine-tuning on the heterogeneous ranks
     # ============================================================
-    POLISH_EPOCHS = 1
+    POLISH_EPOCHS = 3
     POLISH_LR = 1e-4
     
     run_polish = (not inference_only) or polish
