@@ -30,7 +30,7 @@ def set_seed(seed):
     torch.cuda.manual_seed_all(seed)
     np.random.seed(seed)
 
-def main(seed=42, use_tpu=False, inference_only=False):
+def main(seed=42, use_tpu=False, inference_only=False, polish=False):
     set_seed(seed)
     print(f"\n{'='*60}\nStarting GPT-2 E2E Baseline (Seed {seed})\n{'='*60}")
     
@@ -280,7 +280,8 @@ def main(seed=42, use_tpu=False, inference_only=False):
     POLISH_EPOCHS = 1
     POLISH_LR = 1e-4
     
-    if not inference_only:
+    run_polish = (not inference_only) or polish
+    if run_polish:
         print(f"\n{'='*60}")
         print(f"Starting Stage 4: Polish Run ({POLISH_EPOCHS} epoch @ lr={POLISH_LR})")
         print(f"{'='*60}")
@@ -363,8 +364,9 @@ def main(seed=42, use_tpu=False, inference_only=False):
         
         print("Polish run complete!")
     
-    if not inference_only:
-        print(f"\nSaving polished model weights to {save_path}...")
+    if run_polish:
+        polished_save_path = "gpt2_raa_lora_polished.pt"
+        print(f"\nSaving polished model weights to {polished_save_path}...")
         # Save the polished state (pruned + recovered weights)
         polished_state = {
             'model': {n: p.cpu().clone() for n, p in model.named_parameters() if p.requires_grad},
@@ -373,7 +375,11 @@ def main(seed=42, use_tpu=False, inference_only=False):
             'pruning_complete': True,
             'polish_complete': True,
         }
-        torch.save(polished_state, save_path)
+        torch.save(polished_state, polished_save_path)
+    
+    if not inference_only and not run_polish:
+        print(f"\nSaving best model weights to {save_path}...")
+        torch.save(best_model_state, save_path)
     
     # ============================================================
     # INFERENCE & EVALUATION (E2E Benchmark)
@@ -468,6 +474,7 @@ if __name__ == "__main__":
     parser.add_argument("--seed", type=int, default=42, help="Random seed (benchmark requires 3)")
     parser.add_argument("--use_tpu", action="store_true", help="Set this flag to use TPU via PyTorch XLA")
     parser.add_argument("--inference_only", action="store_true", help="Skip training and run inference using gpt2_raa_lora_best.pt")
+    parser.add_argument("--polish", action="store_true", help="Run the Stage 4 polish epoch (works with --inference_only to polish existing weights)")
     args = parser.parse_args()
-    main(args.seed, args.use_tpu, args.inference_only)
+    main(args.seed, args.use_tpu, args.inference_only, args.polish)
 
