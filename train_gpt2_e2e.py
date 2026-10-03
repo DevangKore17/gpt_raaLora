@@ -58,7 +58,7 @@ def main(seed=42, use_tpu=False, inference_only=False, polish=False):
     DROPOUT = 0.1
     R_MAX = 4
     ALPHA = 32
-    TARGET_BUDGET = 0.5
+    TARGET_BUDGET = 0.7
     
     # ============================================================
     # MODEL & TOKENIZER
@@ -444,7 +444,7 @@ def main(seed=42, use_tpu=False, inference_only=False, polish=False):
             max_new_tokens=60,
             num_beams=num_beams,
             length_penalty=0.9,
-            no_repeat_ngram_size=4,
+            no_repeat_ngram_size=0,
             pad_token_id=tokenizer.eos_token_id
         )
         
