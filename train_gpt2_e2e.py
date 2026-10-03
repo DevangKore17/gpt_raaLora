@@ -404,13 +404,14 @@ def main(seed=42, use_tpu=False, inference_only=False):
         # but since we already tokenized with padding, the input_ids contain the gold response.
         # To strictly do inference, we should tokenize JUST the prompts.
         # We do it dynamically here for the benchmark:
-        prompts = [tokenizer.decode(ids, skip_special_tokens=True).split(" => ")[0] + " => " for ids in input_ids]
+        # NOTE: .cpu() is required for TPU — tokenizer.decode expects CPU tensors
+        prompts = [tokenizer.decode(ids.cpu(), skip_special_tokens=True).split(" => ")[0] + " => " for ids in input_ids]
         tokenizer.padding_side = "left"
         prompt_encodings = tokenizer(prompts, return_tensors="pt", padding="max_length", max_length=128, truncation=True).to(device)
         
         num_beams = 10
         for layer in lora_layers:
-            layer.current_scale = torch.ones(prompt_encodings.input_ids.size(0) * num_beams, layer.R_max).to(device)
+            layer.current_scale = torch.ones(prompt_encodings.input_ids.size(0) * num_beams, layer.R_max, device=device)
             
         start_time = time.time()
         
@@ -425,6 +426,9 @@ def main(seed=42, use_tpu=False, inference_only=False):
         )
         
         end_time = time.time()
+        
+        # Move to CPU for decoding and metric calculation
+        generated_ids = generated_ids.cpu()
         
         # Calculate tokens generated and latency
         new_tokens = generated_ids.shape[1] - prompt_encodings.input_ids.shape[1]
