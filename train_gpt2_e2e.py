@@ -59,7 +59,7 @@ def main(seed=42, use_tpu=False, inference_only=False, polish=False):
     R_MAX = 4
     ALPHA = 32
     TARGET_BUDGET = 0.7
-    PRUNING_THRESHOLD = 0.1
+    PRUNING_THRESHOLD = 0.4
     
     # ============================================================
     # MODEL & TOKENIZER
@@ -274,6 +274,12 @@ def main(seed=42, use_tpu=False, inference_only=False, polish=False):
         if p.requires_grad: p.data.copy_(best_model_state['model'][n])
     for n, p in router.named_parameters():
         p.data.copy_(best_model_state['router'][n])
+        
+    if not inference_only:
+        # SAFETY CHECKPOINT: Save the base trained weights immediately!
+        # If Colab times out during the Polish run, you won't lose the 5 epochs of training.
+        print(f"\nSaving pre-pruning checkpoint to {save_path}...")
+        torch.save(best_model_state, save_path)
         
     final_routing_matrix = best_model_state['ema'].to(device)
     prune_gpt2_layers(final_routing_matrix, lora_layers, threshold=PRUNING_THRESHOLD)
