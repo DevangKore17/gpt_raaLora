@@ -304,6 +304,8 @@ def main(seed=42, use_tpu=False, inference_only=False, polish=False):
             else:
                 polish_iterator = train_dataloader
                 
+            pending_polish_loss = torch.tensor(0.0, device=device)
+            
             for batch in tqdm(polish_iterator, desc=f"Polish Epoch {polish_epoch+1}/{POLISH_EPOCHS}"):
                 input_ids = batch['input_ids'].to(device)
                 attention_mask = batch['attention_mask'].to(device)
@@ -331,8 +333,14 @@ def main(seed=42, use_tpu=False, inference_only=False, polish=False):
                     polish_optimizer.step()
                     
                 polish_scheduler.step()
-                polish_train_loss += task_loss.item()
+                pending_polish_loss += task_loss.detach()
                 num_batches += 1
+                
+                if num_batches % 50 == 0:
+                    polish_train_loss += pending_polish_loss.item()
+                    pending_polish_loss = torch.tensor(0.0, device=device)
+            
+            polish_train_loss += pending_polish_loss.item()
             
             avg_polish_loss = polish_train_loss / num_batches
             
@@ -346,6 +354,8 @@ def main(seed=42, use_tpu=False, inference_only=False, polish=False):
                 polish_val_iterator = val_dataloader
                 
             with torch.no_grad():
+                pending_val_loss = torch.tensor(0.0, device=device)
+                val_batches = 0
                 for batch in tqdm(polish_val_iterator, desc=f"Polish Epoch {polish_epoch+1}/{POLISH_EPOCHS} [Val]", leave=False):
                     input_ids = batch['input_ids'].to(device)
                     attention_mask = batch['attention_mask'].to(device)
@@ -357,7 +367,14 @@ def main(seed=42, use_tpu=False, inference_only=False, polish=False):
                     outputs = model(input_ids=input_ids, attention_mask=attention_mask)
                     shift_logits = outputs.logits[..., :-1, :].contiguous()
                     shift_labels = labels[..., 1:].contiguous()
-                    polish_val_loss += loss_fn(shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1)).item()
+                    pending_val_loss += loss_fn(shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1)).detach()
+                    val_batches += 1
+                    
+                    if val_batches % 50 == 0:
+                        polish_val_loss += pending_val_loss.item()
+                        pending_val_loss = torch.tensor(0.0, device=device)
+                        
+                polish_val_loss += pending_val_loss.item()
             
             avg_polish_val = polish_val_loss / len(val_dataloader)
             print(f"Polish Epoch {polish_epoch+1} | Train Loss: {avg_polish_loss:.4f} | Val Loss: {avg_polish_val:.4f}")
