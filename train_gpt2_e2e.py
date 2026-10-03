@@ -48,7 +48,7 @@ def main(seed=42, use_tpu=False, inference_only=False, polish=False):
     # ============================================================
     # HYPERPARAMETERS
     # ============================================================
-    MODEL_NAME = "gpt2"
+    MODEL_NAME = "gpt2-medium"
     BATCH_SIZE = 8
     EPOCHS = 5
     LR = 0.0002
@@ -59,6 +59,7 @@ def main(seed=42, use_tpu=False, inference_only=False, polish=False):
     R_MAX = 4
     ALPHA = 32
     TARGET_BUDGET = 0.7
+    PRUNING_THRESHOLD = 0.1
     
     # ============================================================
     # MODEL & TOKENIZER
@@ -265,7 +266,7 @@ def main(seed=42, use_tpu=False, inference_only=False, polish=False):
         p.data.copy_(best_model_state['router'][n])
         
     final_routing_matrix = best_model_state['ema'].to(device)
-    prune_gpt2_layers(final_routing_matrix, lora_layers, threshold=TARGET_BUDGET)
+    prune_gpt2_layers(final_routing_matrix, lora_layers, threshold=PRUNING_THRESHOLD)
     
     # ============================================================
     # STAGE 4: POLISH RUN (Post-Pruning Recovery)
