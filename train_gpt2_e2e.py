@@ -231,6 +231,8 @@ def main(seed=42, use_tpu=False, inference_only=False, polish=False):
             val_epoch_iterator = val_dataloader
             
         with torch.no_grad():
+            pending_val_loss = torch.tensor(0.0, device=device)
+            val_batches = 0
             for batch in tqdm(val_epoch_iterator, desc=f"Epoch {epoch+1}/{EPOCHS} [Val]", leave=False):
                 input_ids = batch['input_ids'].to(device)
                 attention_mask = batch['attention_mask'].to(device)
@@ -244,7 +246,15 @@ def main(seed=42, use_tpu=False, inference_only=False, polish=False):
                 outputs = model(input_ids=input_ids, attention_mask=attention_mask)
                 shift_logits = outputs.logits[..., :-1, :].contiguous()
                 shift_labels = labels[..., 1:].contiguous()
-                val_loss += loss_fn(shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1)).item()
+                
+                pending_val_loss += loss_fn(shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1)).detach()
+                val_batches += 1
+                
+                if val_batches % 50 == 0:
+                    val_loss += pending_val_loss.item()
+                    pending_val_loss = torch.tensor(0.0, device=device)
+                    
+            val_loss += pending_val_loss.item()
         avg_val = val_loss / len(val_dataloader)
         print(f"Epoch {epoch+1} | Train Loss: {train_loss/len(train_dataloader):.4f} | Val Loss: {avg_val:.4f}")
         
