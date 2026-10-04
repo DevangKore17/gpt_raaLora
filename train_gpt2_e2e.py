@@ -267,22 +267,43 @@ def main(seed=42, use_tpu=False, inference_only=False, polish=False):
             }
             
     # ============================================================
-    # PRUNING (ON BEST EPOCH)
+    # PRUNING & RESTORING WEIGHTS
     # ============================================================
-    print("\nRestoring best model for pruning...")
-    for n, p in model.named_parameters():
-        if p.requires_grad: p.data.copy_(best_model_state['model'][n])
-    for n, p in router.named_parameters():
-        p.data.copy_(best_model_state['router'][n])
+    # Detect if the weights are already pruned (either by flag or by checking tensor shapes)
+    is_already_pruned = best_model_state.get('polish_complete', False)
+    if not is_already_pruned:
+        for n, p in best_model_state['model'].items():
+            if "MatA_q" in n and p.shape[1] < R_MAX:
+                is_already_pruned = True
+                break
+
+    if is_already_pruned:
+        # We are loading a model that was already pruned and polished!
+        print("\nDetected polished weights! Adjusting architecture to match pruned shapes...")
+        # 1. Prune the empty architecture first so the tensor shapes match
+        final_routing_matrix = best_model_state['ema'].to(device)
+        prune_gpt2_layers(final_routing_matrix, lora_layers, threshold=PRUNING_THRESHOLD)
         
-    if not inference_only:
-        # SAFETY CHECKPOINT: Save the base trained weights immediately!
-        # If Colab times out during the Polish run, you won't lose the 5 epochs of training.
-        print(f"\nSaving pre-pruning checkpoint to {save_path}...")
-        torch.save(best_model_state, save_path)
+        # 2. Now that shapes match, copy the polished weights in
+        for n, p in model.named_parameters():
+            if p.requires_grad: p.data.copy_(best_model_state['model'][n])
+            
+        print("Polished weights successfully loaded!")
         
-    final_routing_matrix = best_model_state['ema'].to(device)
-    prune_gpt2_layers(final_routing_matrix, lora_layers, threshold=PRUNING_THRESHOLD)
+    else:
+        # Standard flow: Load the pre-pruned weights, then prune them
+        print("\nRestoring best model for pruning...")
+        for n, p in model.named_parameters():
+            if p.requires_grad: p.data.copy_(best_model_state['model'][n])
+        for n, p in router.named_parameters():
+            p.data.copy_(best_model_state['router'][n])
+            
+        if not inference_only:
+            print(f"\nSaving pre-pruning checkpoint to {save_path}...")
+            torch.save(best_model_state, save_path)
+            
+        final_routing_matrix = best_model_state['ema'].to(device)
+        prune_gpt2_layers(final_routing_matrix, lora_layers, threshold=PRUNING_THRESHOLD)
     
     # ============================================================
     # STAGE 4: POLISH RUN (Post-Pruning Recovery)
