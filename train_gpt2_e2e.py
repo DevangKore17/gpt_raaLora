@@ -460,9 +460,16 @@ def main(seed=42, use_tpu=False, inference_only=False, polish=False):
     # 1. Extract unique MRs from the dataset (preserving order)
     raw_test_mrs = dataset["test"]["meaning_representation"]
     unique_mrs = []
+    
+    def standardize_mr(mr_str):
+        # Split by comma, strip whitespace, sort alphabetically, and rejoin
+        attrs = [attr.strip() for attr in mr_str.split(",")]
+        return ", ".join(sorted(attrs))
+        
     for mr in raw_test_mrs:
-        if mr not in unique_mrs:
-            unique_mrs.append(mr)
+        std_mr = standardize_mr(mr)
+        if std_mr not in unique_mrs:
+            unique_mrs.append(std_mr)
             
     print(f"Grouped {len(raw_test_mrs)} test rows into {len(unique_mrs)} unique Meaning Representations for inference.")
     
