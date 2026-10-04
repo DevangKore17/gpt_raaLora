@@ -456,17 +456,21 @@ def main(seed=42, use_tpu=False, inference_only=False, polish=False):
     total_generation_time = 0.0
     
     predictions = []
-    # E2E test set can be large; you can subset this for quick testing if needed
-    for i, batch in enumerate(test_dataloader):
-        input_ids = batch['input_ids'].to(device)
+    
+    # 1. Extract unique MRs from the dataset (preserving order)
+    raw_test_mrs = dataset["test"]["meaning_representation"]
+    unique_mrs = []
+    for mr in raw_test_mrs:
+        if mr not in unique_mrs:
+            unique_mrs.append(mr)
+            
+    print(f"Grouped {len(raw_test_mrs)} test rows into {len(unique_mrs)} unique Meaning Representations for inference.")
+    
+    # 2. Batch and generate
+    for i in tqdm(range(0, len(unique_mrs), BATCH_SIZE), desc="Generating"):
+        batch_mrs = unique_mrs[i:i+BATCH_SIZE]
+        prompts = [f"{mr} => " for mr in batch_mrs]
         
-        # We only want the prompt (meaning representation). 
-        # For HF E2E dataset, we must extract the prompt up to " => " manually,
-        # but since we already tokenized with padding, the input_ids contain the gold response.
-        # To strictly do inference, we should tokenize JUST the prompts.
-        # We do it dynamically here for the benchmark:
-        # NOTE: .cpu() is required for TPU — tokenizer.decode expects CPU tensors
-        prompts = [tokenizer.decode(ids.cpu(), skip_special_tokens=True).split(" => ")[0] + " => " for ids in input_ids]
         tokenizer.padding_side = "left"
         prompt_encodings = tokenizer(prompts, return_tensors="pt", padding="max_length", max_length=128, truncation=True).to(device)
         
